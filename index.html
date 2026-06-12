@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Go Journal · 棋譜</title>
+  <meta name="description" content="A beautiful animated journal for recording, replaying and reviewing your Go games.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif:ital,wght@0,400;0,600;1,400&family=Noto+Sans:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <canvas id="ambient-canvas" aria-hidden="true"></canvas>
+
+  <div id="app">
+    <header id="app-header">
+      <button id="brand" class="brand" title="Back to library">
+        <span class="brand-mark">碁</span>
+        <span class="brand-name">Go Journal</span>
+      </button>
+      <div class="header-actions">
+        <button id="btn-sfx" class="icon-btn" title="Stone sounds">🔔</button>
+        <button id="btn-ambient-audio" class="icon-btn" title="Ambient sound">🎐</button>
+        <button id="btn-import" class="ghost-btn">Import SGF</button>
+        <button id="btn-new-game" class="primary-btn">＋ New Game</button>
+      </div>
+    </header>
+
+    <main id="main">
+      <!-- ═══════════ Library ═══════════ -->
+      <section id="view-library" class="view">
+        <div id="review-later-section" hidden>
+          <h2 class="section-title"><span class="ink-accent">復</span> Review later</h2>
+          <div id="review-later-grid" class="card-row"></div>
+        </div>
+        <div class="library-header">
+          <h2 class="section-title"><span class="ink-accent">譜</span> Your games</h2>
+        </div>
+        <div id="games-grid" class="card-grid"></div>
+        <div id="empty-state" hidden>
+          <div class="empty-stone"></div>
+          <h2>Your game journal is empty</h2>
+          <p>Record a game stone by stone, then come back to replay and study it.</p>
+          <button id="btn-empty-new" class="primary-btn">Record your first game</button>
+        </div>
+      </section>
+
+      <!-- ═══════════ Editor / Review ═══════════ -->
+      <section id="view-editor" class="view" hidden>
+        <div class="editor-layout">
+          <div class="board-column">
+            <div class="player-bar">
+              <div class="player player-black">
+                <span class="stone-dot black"></span>
+                <div class="player-text">
+                  <span id="pb-name">Black</span>
+                  <span id="pb-captures" class="captures">captures 0</span>
+                </div>
+              </div>
+              <div class="move-counter" id="move-counter">0 / 0</div>
+              <div class="player player-white">
+                <div class="player-text right">
+                  <span id="pw-name">White</span>
+                  <span id="pw-captures" class="captures">captures 0</span>
+                </div>
+                <span class="stone-dot white"></span>
+              </div>
+            </div>
+
+            <div class="board-wrap">
+              <canvas id="board-canvas"></canvas>
+              <div id="replay-caption" hidden></div>
+            </div>
+
+            <div class="controls" id="editor-controls">
+              <div class="controls-row nav-row">
+                <button id="btn-first" class="ctl" title="First move (Home)">⏮</button>
+                <button id="btn-prev" class="ctl" title="Previous move (←)">◀</button>
+                <button id="btn-replay" class="ctl wide" title="Cinematic replay (Space)">▶ Replay</button>
+                <button id="btn-next" class="ctl" title="Next move (→)">▶</button>
+                <button id="btn-last" class="ctl" title="Last move (End)">⏭</button>
+              </div>
+              <div class="controls-row edit-row">
+                <button id="btn-undo" class="ctl" title="Undo last move (Ctrl+Z)">↩ Undo</button>
+                <button id="btn-redo" class="ctl" title="Redo (Ctrl+Y)">↪ Redo</button>
+                <button id="btn-pass" class="ctl" title="Pass (P)">Pass</button>
+                <div class="color-mode" title="Color of the next stone">
+                  <button data-mode="auto" class="mode-btn selected">Auto</button>
+                  <button data-mode="black" class="mode-btn">●</button>
+                  <button data-mode="white" class="mode-btn">○</button>
+                </div>
+                <button id="btn-numbers" class="ctl toggle" title="Show move numbers (N)">№</button>
+              </div>
+            </div>
+
+            <div id="timeline" class="timeline" aria-label="Move timeline"></div>
+          </div>
+
+          <aside class="side-panel">
+            <div class="panel-card" id="panel-meta">
+              <div class="panel-card-head">
+                <h3 id="meta-title">Game</h3>
+                <button id="btn-edit-meta" class="ghost-btn small">Edit details</button>
+              </div>
+              <div id="meta-summary" class="meta-summary"></div>
+              <label class="check-row">
+                <input type="checkbox" id="chk-review-later">
+                <span>Mark game for review later</span>
+              </label>
+            </div>
+
+            <div class="panel-card" id="panel-move">
+              <div class="panel-card-head">
+                <h3 id="move-title">Move</h3>
+                <button id="btn-bookmark" class="icon-btn" title="Bookmark this move (B)">☆</button>
+              </div>
+              <div id="move-tags" class="tag-chips"></div>
+              <textarea id="move-note" rows="3" placeholder="Thoughts on this move… e.g. “I should have defended here.”"></textarea>
+              <button id="btn-delete-move" class="danger-btn small">Delete this move</button>
+            </div>
+
+            <div class="panel-card" id="panel-moments">
+              <div class="panel-card-head">
+                <h3>Key moments</h3>
+                <button id="btn-summary" class="ghost-btn small">Game memory →</button>
+              </div>
+              <div id="moments-list" class="moments-list"></div>
+            </div>
+
+            <div class="panel-card" id="panel-actions">
+              <button id="btn-export" class="ghost-btn">Export SGF</button>
+              <button id="btn-back-library" class="ghost-btn">← Library</button>
+            </div>
+          </aside>
+        </div>
+
+        <div id="replay-controls" hidden>
+          <button id="btn-replay-pause" class="ctl">⏸</button>
+          <button id="btn-replay-speed" class="ctl">1×</button>
+          <button id="btn-replay-exit" class="ctl">✕ Exit replay</button>
+        </div>
+      </section>
+
+      <!-- ═══════════ Game memory / summary ═══════════ -->
+      <section id="view-summary" class="view" hidden>
+        <div class="summary-layout">
+          <button id="btn-summary-back" class="ghost-btn">← Back</button>
+          <div class="summary-hero panel-card">
+            <h2 id="summary-versus"></h2>
+            <div id="summary-result" class="result-badge"></div>
+            <div id="summary-meta" class="meta-summary"></div>
+            <canvas id="summary-thumb" class="summary-thumb"></canvas>
+            <div id="summary-captures"></div>
+            <button id="btn-summary-open" class="primary-btn">Open on the board</button>
+          </div>
+          <div class="panel-card">
+            <h3>After-game thoughts</h3>
+            <textarea id="summary-thoughts" rows="5" placeholder="How did this game feel? What will you study next time?"></textarea>
+          </div>
+          <div class="panel-card">
+            <h3>Key moments timeline</h3>
+            <div id="summary-moments" class="moments-list large"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- New / edit game dialog -->
+  <dialog id="dialog-game">
+    <form id="game-form" method="dialog">
+      <h2 id="game-form-title">New game</h2>
+      <div class="form-row" id="size-row">
+        <label>Board size</label>
+        <div class="size-options">
+          <label class="size-option"><input type="radio" name="size" value="9"><span>9×9</span></label>
+          <label class="size-option"><input type="radio" name="size" value="13"><span>13×13</span></label>
+          <label class="size-option"><input type="radio" name="size" value="19" checked><span>19×19</span></label>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label>Black player <input name="playerBlack" placeholder="Name" autocomplete="off"></label>
+        <label>Black rank <input name="blackRank" placeholder="e.g. 5k" autocomplete="off"></label>
+        <label>White player <input name="playerWhite" placeholder="Name" autocomplete="off"></label>
+        <label>White rank <input name="whiteRank" placeholder="e.g. 3k" autocomplete="off"></label>
+        <label>Date <input name="date" type="date"></label>
+        <label>Komi <input name="komi" type="number" step="0.5" value="6.5"></label>
+        <label class="span2">Location <input name="location" placeholder="Club, online server…" autocomplete="off"></label>
+        <label class="span2">Result
+          <input name="result" id="result-input" placeholder="e.g. B+3.5, W+R, draw" autocomplete="off">
+        </label>
+        <div class="result-quick span2">
+          <button type="button" data-result="B+R">B+Resign</button>
+          <button type="button" data-result="W+R">W+Resign</button>
+          <button type="button" data-result="B+">B+…</button>
+          <button type="button" data-result="W+">W+…</button>
+          <button type="button" data-result="Draw">Draw</button>
+        </div>
+        <label class="span2">Game notes <textarea name="notes" rows="2" placeholder="Context, event, mood…"></textarea></label>
+      </div>
+      <div class="form-actions">
+        <button type="button" id="btn-form-cancel" class="ghost-btn">Cancel</button>
+        <button type="submit" class="primary-btn" id="btn-form-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Confirm dialog -->
+  <dialog id="dialog-confirm">
+    <p id="confirm-text"></p>
+    <div class="form-actions">
+      <button id="btn-confirm-no" class="ghost-btn">Cancel</button>
+      <button id="btn-confirm-yes" class="danger-btn">Confirm</button>
+    </div>
+  </dialog>
+
+  <input type="file" id="file-input" accept=".sgf,.SGF,text/plain" hidden>
+  <div id="toast" role="status"></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
