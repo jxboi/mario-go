@@ -922,6 +922,7 @@ function bindEvents() {
     state.settings.showNumbers = !state.settings.showNumbers;
     renderer.showNumbers = state.settings.showNumbers;
     $('btn-numbers').classList.toggle('on', state.settings.showNumbers);
+    sound.tick();
     store.saveSettings(state.settings);
     renderer.draw();
   });
@@ -1005,6 +1006,8 @@ function bindEvents() {
       else startReplay();
       return;
     }
+    // while the film is rolling, only space/escape make sense
+    if (state.replay.playing) return;
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); doUndo(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); doRedo(); return; }
     switch (e.key) {

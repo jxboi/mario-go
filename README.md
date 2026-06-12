@@ -37,16 +37,20 @@ browser (localStorage) — no account, no network needed.
 - Continue an unfinished game any time — everything autosaves
 
 **Reviewing**
-- Jump to any move via the animated timeline, arrow keys, or slider chips
-- Cinematic replay mode with adjustable speed, captions and a vignette
+- Jump to any move via the scrubber slider, the animated timeline chips,
+  or the arrow keys
+- Cinematic replay mode: intro/outro title cards, a low gong, a slow
+  breathing zoom, captions, adjustable speed — and it lingers on the
+  moves you marked as important
 - Per-move notes, bookmarks (★) and tags
   (`mistake`, `good move`, `fight`, `capture`, `opening`, `endgame`, `review later`)
 - Key-moments list for quick jumps between marked moves
 - "Game memory" summary page: result, final position, captures,
   after-game thoughts and the timeline of important moments
-- "Review later" shelf on the library home screen
-- Move numbers on stones (toggle), glowing last-move marker,
-  capture counters
+- "Review later" shelf and All / In progress / Finished / Review later
+  filters on the library home screen
+- Move numbers on stones (toggle), breathing last-move marker,
+  capture counters that bump when stones are taken
 
 **Import / export**
 - Standard SGF export and import (main line). Notes use `C[]`,
@@ -54,16 +58,21 @@ browser (localStorage) — no account, no network needed.
   custom `TG[]` property that other SGF tools safely ignore.
 
 **Atmosphere**
-- Warm wood board with procedural grain, soft-drop stone animation with
-  bounce and shadow, ink-dissolve capture animation, drifting mist and
-  falling-leaf background, hover/tap stone preview, synthesized stone
-  click and capture sounds plus an optional ambient pad (all WebAudio,
-  no audio files)
+- Warm speckled wood board with a bevelled rim, soft-drop stone
+  animation with bounce, shadow and an impact ripple, smoke-and-ink
+  capture dissolve, stones with clamshell texture and natural per-point
+  variation, drifting mist and falling-leaf background, paper-grain
+  page texture, hover/tap stone preview
+- Synthesized sounds — stone click, capture swish, undo lift, save
+  chime, replay gong, soft UI ticks — plus an optional ambient pad
+  (all WebAudio, no audio files)
 
 **Mobile**
 - Fully responsive; on touch screens the first tap previews the stone on
   the nearest intersection and a second tap confirms, so placement is
-  always accurate.
+  always accurate. Move notes and tags live in a slide-up bottom sheet
+  behind a floating annotate button that shows a dot when the current
+  move already has thoughts on it.
 
 ## Keyboard shortcuts (editor)
 
@@ -89,6 +98,7 @@ js/storage.js      localStorage persistence
 js/board.js        canvas renderer: wood, stones, animations, input
 js/ambient.js      background mist / leaf particle canvas
 js/sound.js        WebAudio synthesized SFX and ambient pad
+js/icons.js        inline SVG icon set
 js/main.js         application controller wiring everything together
 test/              node-runnable logic tests
 ```
