@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Go Journal · 棋譜</title>
   <meta name="description" content="A beautiful animated journal for recording, replaying and reviewing your Go games.">
+  <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><radialGradient id="g" cx="35%25" cy="30%25" r="80%25"><stop offset="0%25" stop-color="%23676767"/><stop offset="100%25" stop-color="%23080808"/></radialGradient></defs><circle cx="50" cy="50" r="46" fill="url(%23g)"/></svg>'>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif:ital,wght@0,400;0,600;1,400&family=Noto+Sans:wght@400;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
@@ -35,6 +36,12 @@
         </div>
         <div class="library-header">
           <h2 class="section-title"><span class="ink-accent">譜</span> Your games</h2>
+          <div id="library-filters" class="filter-chips">
+            <button data-filter="all" class="filter-chip on">All</button>
+            <button data-filter="progress" class="filter-chip">In progress</button>
+            <button data-filter="finished" class="filter-chip">Finished</button>
+            <button data-filter="review" class="filter-chip">Review later</button>
+          </div>
         </div>
         <div id="games-grid" class="card-grid"></div>
         <div id="empty-state" hidden>
@@ -70,6 +77,10 @@
             <div class="board-wrap">
               <canvas id="board-canvas"></canvas>
               <div id="replay-caption" hidden></div>
+              <div id="replay-title" hidden>
+                <h2 id="replay-title-main"></h2>
+                <p id="replay-title-sub"></p>
+              </div>
             </div>
 
             <div class="controls" id="editor-controls">
@@ -93,6 +104,10 @@
               </div>
             </div>
 
+            <div class="scrubber">
+              <input type="range" id="timeline-slider" min="0" max="0" value="0" step="1"
+                     aria-label="Scrub through moves">
+            </div>
             <div id="timeline" class="timeline" aria-label="Move timeline"></div>
           </div>
 
@@ -110,9 +125,13 @@
             </div>
 
             <div class="panel-card" id="panel-move">
+              <div class="sheet-handle" aria-hidden="true"></div>
               <div class="panel-card-head">
                 <h3 id="move-title">Move</h3>
-                <button id="btn-bookmark" class="icon-btn" title="Bookmark this move (B)">☆</button>
+                <div class="head-actions">
+                  <button id="btn-bookmark" class="icon-btn" title="Bookmark this move (B)">☆</button>
+                  <button id="btn-sheet-close" class="icon-btn sheet-only" title="Close"></button>
+                </div>
               </div>
               <div id="move-tags" class="tag-chips"></div>
               <textarea id="move-note" rows="3" placeholder="Thoughts on this move… e.g. “I should have defended here.”"></textarea>
@@ -133,6 +152,11 @@
             </div>
           </aside>
         </div>
+
+        <button id="btn-annotate" class="fab" title="Annotate this move">
+          <span id="fab-icon"></span>
+          <span id="fab-dot" class="fab-dot" hidden></span>
+        </button>
 
         <div id="replay-controls" hidden>
           <button id="btn-replay-pause" class="ctl">⏸</button>

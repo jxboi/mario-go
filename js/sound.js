@@ -84,6 +84,94 @@ export class SoundEngine {
     noise.start(t);
   }
 
+  /** Soft downward swish — a stone being lifted off the board. */
+  undoSwish() {
+    if (!this.sfxEnabled) return;
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const dur = 0.28;
+    const buffer = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / data.length, 1.5) * 0.5;
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(2600, t);
+    lp.frequency.exponentialRampToValueAtTime(500, t + dur);
+    const gain = ctx.createGain();
+    gain.gain.value = 0.12;
+    noise.connect(lp).connect(gain).connect(ctx.destination);
+    noise.start(t);
+  }
+
+  /** Two gentle plucked notes — something was kept safe. */
+  saveChime() {
+    if (!this.sfxEnabled) return;
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    [659.3, 880].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const gain = ctx.createGain();
+      const start = t + i * 0.13;
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(0.07, start + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.55);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.6);
+    });
+  }
+
+  /** Tiny high blip for toggles and small controls. */
+  tick() {
+    if (!this.sfxEnabled) return;
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(1320, t);
+    osc.frequency.exponentialRampToValueAtTime(990, t + 0.06);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.05, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.09);
+  }
+
+  /** Low singing-bowl strike for the start of a cinematic replay. */
+  gong() {
+    if (!this.sfxEnabled) return;
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 900;
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(0.16, t);
+    master.gain.exponentialRampToValueAtTime(0.001, t + 2.8);
+    lp.connect(master).connect(ctx.destination);
+    [196, 294.7, 392.8].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq * (1 + (Math.random() - 0.5) * 0.004);
+      const gain = ctx.createGain();
+      gain.gain.value = 0.5 / (i + 1);
+      osc.connect(gain).connect(lp);
+      osc.start(t);
+      osc.stop(t + 3);
+    });
+  }
+
   /** Gentle pad: two slowly-beating sines through a lowpass filter. */
   startAmbient() {
     const ctx = this.ensureContext();

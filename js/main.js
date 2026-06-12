@@ -12,6 +12,7 @@ import { gameToSgf, sgfToGame } from './sgf.js';
 import * as store from './storage.js';
 import { SoundEngine } from './sound.js';
 import { AmbientBackground } from './ambient.js';
+import { ICONS } from './icons.js';
 
 const $ = (id) => document.getElementById(id);
 const COL_LETTERS = 'ABCDEFGHJKLMNOPQRST';
@@ -24,6 +25,8 @@ const state = {
   view: 'library',
   colorMode: 'auto',
   summaryReturn: 'library',
+  libraryFilter: 'all',
+  lastCaptures: { black: 0, white: 0 },
   replay: { playing: false, paused: false, speed: 1, timer: null },
 };
 
@@ -91,14 +94,41 @@ function escapeFilename(s) {
   return (s || '').replace(/[^\w一-鿿-]+/g, '_') || 'player';
 }
 
+function relativeTime(iso) {
+  if (!iso) return '';
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  return `${Math.floor(months / 12)}y ago`;
+}
+
 // ---------------------------------------------------------------- views
 
 function showView(name) {
   state.view = name;
+  document.body.dataset.view = name;
   for (const id of ['view-library', 'view-editor', 'view-summary']) {
-    $(id).hidden = id !== `view-${name}`;
+    const section = $(id);
+    const show = id === `view-${name}`;
+    if (show && section.hidden) {
+      section.hidden = false;
+      // retrigger the entrance animation
+      section.classList.remove('enter');
+      void section.offsetWidth;
+      section.classList.add('enter');
+    } else if (!show) {
+      section.hidden = true;
+    }
   }
   renderer.setActive(name === 'editor');
+  closeSheet();
   if (name === 'library') renderLibrary();
   window.scrollTo({ top: 0 });
 }
@@ -115,14 +145,17 @@ function gameCard(game, compact = false) {
     `${game.playerBlack || 'Black'} vs ${game.playerWhite || 'White'}`);
   body.appendChild(title);
 
-  const sub = el('p', 'card-sub',
-    [game.date, game.location].filter(Boolean).join(' · ') || 'No date');
+  const subBits = [game.date, game.location].filter(Boolean).join(' · ') || 'No date';
+  const sub = el('p', 'card-sub', subBits);
+  const updated = el('span', 'card-updated', ` · ${relativeTime(game.updatedAt)}`);
+  sub.appendChild(updated);
   body.appendChild(sub);
 
   const badges = el('div', 'card-badges');
   badges.appendChild(el('span', 'badge', `${game.size}×${game.size}`));
   badges.appendChild(el('span', 'badge', `${game.moves.length} moves`));
   if (game.result) badges.appendChild(el('span', 'badge result', game.result));
+  else badges.appendChild(el('span', 'badge progress', 'in progress'));
   const moments = keyMoments(game).length;
   if (moments) badges.appendChild(el('span', 'badge gold', `★ ${moments}`));
   if (hasReviewLater(game)) badges.appendChild(el('span', 'badge review', 'review later'));
@@ -130,15 +163,16 @@ function gameCard(game, compact = false) {
   card.appendChild(body);
 
   const actions = el('div', 'card-actions');
-  const mkBtn = (label, title, fn) => {
-    const b = el('button', 'icon-btn', label);
+  const mkBtn = (icon, title, fn) => {
+    const b = el('button', 'icon-btn');
+    b.innerHTML = icon;
     b.title = title;
     b.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
     actions.appendChild(b);
   };
-  mkBtn('📖', 'Game memory', () => { state.summaryReturn = 'library'; openSummary(game); });
-  mkBtn('⬇', 'Export SGF', () => exportSgf(game));
-  mkBtn('🗑', 'Delete game', async () => {
+  mkBtn(ICONS.book, 'Game memory', () => { state.summaryReturn = 'library'; openSummary(game); });
+  mkBtn(ICONS.download, 'Export SGF', () => exportSgf(game));
+  mkBtn(ICONS.trash, 'Delete game', async () => {
     const ok = await confirmDialog(
       `Delete "${game.playerBlack || 'Black'} vs ${game.playerWhite || 'White'}" forever?`);
     if (!ok) return;
@@ -166,6 +200,13 @@ function gameCard(game, compact = false) {
   return card;
 }
 
+const LIBRARY_FILTERS = {
+  all: () => true,
+  progress: (g) => !g.result,
+  finished: (g) => !!g.result,
+  review: hasReviewLater,
+};
+
 function renderLibrary() {
   const games = [...state.games].sort(
     (a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
@@ -176,12 +217,43 @@ function renderLibrary() {
   reviewGrid.replaceChildren();
 
   const reviewGames = games.filter(hasReviewLater);
-  $('review-later-section').hidden = reviewGames.length === 0;
-  for (const g of reviewGames) reviewGrid.appendChild(gameCard(g, true));
-  for (const g of games) grid.appendChild(gameCard(g));
+  $('review-later-section').hidden =
+    reviewGames.length === 0 || state.libraryFilter === 'review';
+  reviewGames.forEach((g, i) => {
+    const card = gameCard(g, true);
+    card.style.animationDelay = `${Math.min(i * 45, 320)}ms`;
+    reviewGrid.appendChild(card);
+  });
+
+  const filtered = games.filter(LIBRARY_FILTERS[state.libraryFilter] || (() => true));
+  filtered.forEach((g, i) => {
+    const card = gameCard(g);
+    card.style.animationDelay = `${Math.min(i * 45, 360)}ms`;
+    grid.appendChild(card);
+  });
+  if (games.length > 0 && filtered.length === 0) {
+    grid.appendChild(el('p', 'muted filter-empty', 'No games match this filter.'));
+  }
 
   $('empty-state').hidden = games.length > 0;
   document.querySelector('.library-header').hidden = games.length === 0;
+}
+
+// ------------------------------------------------- mobile bottom sheet
+
+function openSheet() {
+  $('panel-move').classList.add('open');
+  document.body.classList.add('sheet-open');
+}
+
+function closeSheet() {
+  $('panel-move').classList.remove('open');
+  document.body.classList.remove('sheet-open');
+}
+
+function toggleSheet() {
+  if ($('panel-move').classList.contains('open')) closeSheet();
+  else openSheet();
 }
 
 // ---------------------------------------------------------------- editor
@@ -234,10 +306,34 @@ function syncBoard(animate) {
   renderer.setGhostColor(nextColor());
 
   $('move-counter').textContent = `${nav.index} / ${nav.moveCount}`;
-  $('pb-captures').textContent = `captures ${frame.capturedByBlack}`;
-  $('pw-captures').textContent = `captures ${frame.capturedByWhite}`;
+  setCaptureCount('pb-captures', frame.capturedByBlack, 'black');
+  setCaptureCount('pw-captures', frame.capturedByWhite, 'white');
+
+  const slider = $('timeline-slider');
+  slider.max = nav.moveCount;
+  slider.value = nav.index;
+  const pct = nav.moveCount ? (nav.index / nav.moveCount) * 100 : 0;
+  slider.style.setProperty('--progress', `${pct}%`);
+
   updateMovePanel();
   updateTimelineHighlight();
+}
+
+function setCaptureCount(id, value, key) {
+  const node = $(id);
+  node.textContent = `captures ${value}`;
+  if (state.lastCaptures[key] !== value) {
+    state.lastCaptures[key] = value;
+    node.classList.remove('bump');
+    void node.offsetWidth;
+    node.classList.add('bump');
+  }
+}
+
+/** The mobile FAB shows a dot when the current move has thoughts on it. */
+function updateFabDot(move) {
+  $('fab-dot').hidden = !move
+    || !((move.note && move.note.trim()) || (move.tags && move.tags.length) || move.bookmarked);
 }
 
 function updateMovePanel() {
@@ -253,6 +349,7 @@ function updateMovePanel() {
   $('btn-bookmark').textContent = hasMove && move.bookmarked ? '★' : '☆';
   $('btn-bookmark').classList.toggle('gold', hasMove && !!move.bookmarked);
   $('btn-delete-move').disabled = !hasMove;
+  updateFabDot(move);
 
   const tagBox = $('move-tags');
   tagBox.replaceChildren();
@@ -267,6 +364,8 @@ function updateMovePanel() {
       if (i >= 0) move.tags.splice(i, 1);
       else move.tags.push(tag);
       chip.classList.toggle('on', i < 0);
+      sound.tick();
+      updateFabDot(move);
       persist();
       renderTimeline();
       renderMoments();
@@ -427,6 +526,7 @@ async function doPass() {
 
 function doUndo() {
   if (!state.nav || !state.nav.undo()) return;
+  sound.undoSwish();
   persist();
   syncBoard(true);
   renderTimeline();
@@ -473,33 +573,62 @@ function step(delta, animate = true) {
 
 // ---------------------------------------------------------------- replay
 
+function showReplayTitle(main, sub) {
+  const card = $('replay-title');
+  $('replay-title-main').textContent = main;
+  $('replay-title-sub').textContent = sub || '';
+  card.hidden = false;
+  card.classList.remove('show');
+  void card.offsetWidth;
+  card.classList.add('show');
+}
+
+function hideReplayTitle() {
+  $('replay-title').hidden = true;
+}
+
 function startReplay() {
-  const { nav, replay } = state;
+  const { nav, replay, game } = state;
   if (!nav || nav.moveCount === 0) {
     toast('Nothing to replay yet — place some stones first.');
     return;
   }
   replay.playing = true;
   replay.paused = false;
+  renderer.interactive = false;
+  renderer.clearPending();
+  closeSheet();
   nav.goTo(0);
   syncBoard(false);
   document.body.classList.add('cinematic');
   $('replay-controls').hidden = false;
   $('btn-replay-pause').textContent = '⏸';
-  scheduleReplayStep();
+  sound.gong();
+  showReplayTitle(
+    `${game.playerBlack || 'Black'} vs ${game.playerWhite || 'White'}`,
+    [game.date, game.location].filter(Boolean).join(' · '));
+  clearTimeout(replay.timer);
+  replay.timer = setTimeout(() => {
+    hideReplayTitle();
+    scheduleReplayStep();
+  }, 2400);
 }
 
-function scheduleReplayStep() {
+function scheduleReplayStep(delayOverride) {
   const { replay } = state;
   clearTimeout(replay.timer);
-  replay.timer = setTimeout(replayStep, 1500 / replay.speed);
+  replay.timer = setTimeout(replayStep, delayOverride ?? 1500 / replay.speed);
 }
 
 function replayStep() {
-  const { nav, replay } = state;
+  const { nav, replay, game } = state;
   if (!replay.playing || replay.paused) return;
   if (nav.atEnd) {
-    setTimeout(stopReplay, 1200);
+    showReplayTitle(
+      game.result || 'To be continued…',
+      game.result ? 'Final position' : 'The record ends here');
+    clearTimeout(replay.timer);
+    replay.timer = setTimeout(stopReplay, 3400);
     return;
   }
   nav.goTo(nav.index + 1);
@@ -511,7 +640,11 @@ function replayStep() {
     setTimeout(() => sound.captureSwish(frame.captures.length), 130);
   }
   showReplayCaption(move);
-  scheduleReplayStep();
+  // linger on the moments the player marked as important
+  const annotated = move
+    && (move.bookmarked || (move.note && move.note.trim()) || (move.tags && move.tags.length));
+  const base = 1500 / replay.speed;
+  scheduleReplayStep(annotated ? base * 2.3 : base);
 }
 
 function showReplayCaption(move) {
@@ -536,14 +669,17 @@ function stopReplay() {
   if (!replay.playing) return;
   replay.playing = false;
   clearTimeout(replay.timer);
+  renderer.interactive = true;
   document.body.classList.remove('cinematic');
   $('replay-controls').hidden = true;
   $('replay-caption').hidden = true;
+  hideReplayTitle();
 }
 
 function toggleReplayPause() {
   const { replay } = state;
   replay.paused = !replay.paused;
+  sound.tick();
   $('btn-replay-pause').textContent = replay.paused ? '▶' : '⏸';
   if (!replay.paused) scheduleReplayStep();
   else clearTimeout(replay.timer);
@@ -647,18 +783,22 @@ function submitGameForm() {
   if (Number.isNaN(data.komi)) data.komi = 6.5;
 
   if (editingGame) {
+    const sizeChanged = editingGame.moves.length === 0 && editingGame.size !== data.size;
     Object.assign(editingGame, data, { size: editingGame.moves.length ? editingGame.size : data.size });
     state.games = store.upsertGame(editingGame);
     if (state.view === 'editor' && state.game === editingGame) {
-      if (state.nav.game.size !== renderer.boardSize) renderer.setBoardSize(editingGame.size);
-      renderMetaPanel();
+      // a size change invalidates the navigator's snapshot frames
+      if (sizeChanged) openGame(editingGame);
+      else renderMetaPanel();
     } else {
       renderLibrary();
     }
+    sound.saveChime();
     toast('Game details saved');
   } else {
     const game = createGame(data);
     state.games = store.upsertGame(game);
+    sound.saveChime();
     openGame(game);
     toast('New game created — tap the board to place the first stone');
   }
@@ -678,6 +818,7 @@ function exportSgf(game) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+  sound.tick();
   toast('SGF exported');
 }
 
@@ -705,6 +846,12 @@ function applySoundButtons() {
 }
 
 function bindEvents() {
+  // inline SVG icons (platform emoji look inconsistent)
+  $('btn-sfx').innerHTML = ICONS.sound;
+  $('btn-ambient-audio').innerHTML = ICONS.wind;
+  $('fab-icon').innerHTML = ICONS.pencil;
+  $('btn-sheet-close').innerHTML = ICONS.close;
+
   $('brand').addEventListener('click', () => { stopReplay(); showView('library'); });
   $('btn-new-game').addEventListener('click', () => openGameForm(null));
   $('btn-empty-new').addEventListener('click', () => openGameForm(null));
@@ -745,8 +892,31 @@ function bindEvents() {
     const i = speeds.indexOf(state.replay.speed);
     state.replay.speed = speeds[(i + 1) % speeds.length];
     $('btn-replay-speed').textContent = `${state.replay.speed}×`;
+    sound.tick();
     if (state.replay.playing && !state.replay.paused) scheduleReplayStep();
   });
+
+  $('timeline-slider').addEventListener('input', (e) => {
+    if (!state.nav || state.replay.playing) return;
+    state.nav.goTo(parseInt(e.target.value, 10) || 0);
+    syncBoard(false);
+  });
+
+  // mobile annotation sheet
+  $('btn-annotate').addEventListener('click', toggleSheet);
+  $('btn-sheet-close').addEventListener('click', closeSheet);
+  $('board-canvas').addEventListener('pointerdown', closeSheet);
+
+  // library filters
+  for (const chip of document.querySelectorAll('.filter-chip')) {
+    chip.addEventListener('click', () => {
+      state.libraryFilter = chip.dataset.filter;
+      document.querySelectorAll('.filter-chip')
+        .forEach((c) => c.classList.toggle('on', c === chip));
+      sound.tick();
+      renderLibrary();
+    });
+  }
 
   $('btn-numbers').addEventListener('click', () => {
     state.settings.showNumbers = !state.settings.showNumbers;
@@ -768,6 +938,7 @@ function bindEvents() {
     const move = state.nav && state.nav.currentMove();
     if (!move) return;
     move.bookmarked = !move.bookmarked;
+    sound.tick();
     persist();
     syncBoard(false);
     renderTimeline();
@@ -778,6 +949,7 @@ function bindEvents() {
     const move = state.nav && state.nav.currentMove();
     if (!move) return;
     move.note = $('move-note').value;
+    updateFabDot(move);
     persist();
   });
   $('move-note').addEventListener('change', () => { renderMoments(); renderTimeline(); });
