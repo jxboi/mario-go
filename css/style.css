@@ -591,25 +591,40 @@ button:disabled { opacity: 0.4; cursor: default; }
 .timeline {
   margin: 14px auto 0;
   max-width: min(86vh, 720px);
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  padding: 8px 4px 12px;
+  position: relative;
+  overflow: auto;
+  max-height: 220px;
+  padding: 4px;
   scrollbar-width: thin;
   transition: opacity 0.4s ease;
 }
+.tl-canvas {
+  position: relative;
+  margin: 0 auto;
+}
+.tl-links {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+.tl-link {
+  fill: none;
+  stroke: var(--card-border);
+  stroke-width: 2;
+}
 
 .tl-chip {
-  flex-shrink: 0;
-  min-width: 34px;
-  height: 34px;
+  position: absolute;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   border: 1.5px solid transparent;
   font-size: 11.5px;
   font-variant-numeric: tabular-nums;
-  position: relative;
   display: grid;
   place-items: center;
+  z-index: 1;
 }
 .tl-chip.start {
   background: transparent;
@@ -649,20 +664,6 @@ button:disabled { opacity: 0.4; cursor: default; }
   border-radius: 50%;
   background: var(--vermillion);
 }
-.tl-chip.forked {
-  border-color: var(--gold);
-}
-.tl-chip.forked::after {
-  content: '⑂';
-  position: absolute;
-  top: -8px;
-  left: -5px;
-  font-size: 12px;
-  line-height: 1;
-  color: var(--gold-bright);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-}
-
 /* variations bar — alternative continuations at the current position */
 .variations {
   margin: 0 auto 8px;

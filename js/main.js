@@ -376,30 +376,100 @@ function updateMovePanel() {
   }
 }
 
+// timeline tree geometry (px)
+const TL = { chip: 32, colW: 40, rowH: 38, pad: 10 };
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/**
+ * Assign every tree node a { col, lane }: col is its move depth, the first
+ * child stays on the parent's lane and each extra child drops to a fresh
+ * lane below everything used so far (so branches never overlap). Positions
+ * are returned in a Map so the tree nodes themselves stay clean for storage.
+ */
+function layoutTree(root) {
+  const pos = new Map();
+  const placed = [];
+  let maxLane = 0;
+  let maxCol = 0;
+  const walk = (node, col, lane) => {
+    pos.set(node, { col, lane });
+    placed.push(node);
+    if (col > maxCol) maxCol = col;
+    if (lane > maxLane) maxLane = lane;
+    node.children.forEach((child, k) => {
+      const childLane = k === 0 ? lane : (maxLane += 1);
+      walk(child, col + 1, childLane);
+    });
+  };
+  walk(root, 0, 0);
+  return { placed, pos, maxCol, maxLane };
+}
+
+const chipCenterX = (col) => TL.pad + col * TL.colW + TL.chip / 2;
+const chipCenterY = (lane) => TL.pad + lane * TL.rowH + TL.chip / 2;
+
 function renderTimeline() {
   const box = $('timeline');
   box.replaceChildren();
-  const start = el('button', 'tl-chip start', '◦');
-  start.title = 'Game start';
-  start.addEventListener('click', () => { state.nav.goTo(0); syncBoard(false); });
-  box.appendChild(start);
 
-  state.game.moves.forEach((move, i) => {
-    const chip = el('button', `tl-chip ${move.color === BLACK ? 'black' : 'white'}`);
-    chip.textContent = move.pass ? 'P' : String(i + 1);
-    const forked = state.nav.isBranchPoint(i + 1);
-    chip.title = `Move ${i + 1}: ${colorName(move.color)} ${coordLabel(move)}`
-      + (forked ? ' · branch point' : '')
-      + (move.note ? ` — ${move.note}` : '');
-    if (move.bookmarked) chip.classList.add('starred');
-    if (move.tags && move.tags.length) chip.classList.add('tagged');
-    if (forked) chip.classList.add('forked');
+  const root = state.game.tree;
+  const { placed, pos, maxCol, maxLane } = layoutTree(root);
+
+  const width = TL.pad * 2 + maxCol * TL.colW + TL.chip;
+  const height = TL.pad * 2 + maxLane * TL.rowH + TL.chip;
+  const canvas = el('div', 'tl-canvas');
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+
+  // connectors behind the chips
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('class', 'tl-links');
+  svg.setAttribute('width', width);
+  svg.setAttribute('height', height);
+  for (const node of placed) {
+    const p = pos.get(node);
+    for (const child of node.children) {
+      const c = pos.get(child);
+      const pRight = chipCenterX(p.col) + TL.chip / 2;
+      const pY = chipCenterY(p.lane);
+      const cLeft = chipCenterX(c.col) - TL.chip / 2;
+      const cY = chipCenterY(c.lane);
+      const midX = (pRight + cLeft) / 2;
+      const path = document.createElementNS(SVG_NS, 'path');
+      path.setAttribute('d', `M ${pRight} ${pY} H ${midX} V ${cY} H ${cLeft}`);
+      path.setAttribute('class', 'tl-link');
+      svg.appendChild(path);
+    }
+  }
+  canvas.appendChild(svg);
+
+  for (const node of placed) {
+    const { col, lane } = pos.get(node);
+    const chip = el('button', 'tl-chip');
+    chip.dataset.nodeId = node.id;
+    chip.style.left = `${TL.pad + col * TL.colW}px`;
+    chip.style.top = `${TL.pad + lane * TL.rowH}px`;
+    if (node === root) {
+      chip.classList.add('start');
+      chip.textContent = '◦';
+      chip.title = 'Game start';
+    } else {
+      const move = node.move;
+      chip.classList.add(move.color === BLACK ? 'black' : 'white');
+      chip.textContent = move.pass ? 'P' : String(col);
+      chip.title = `Move ${col}: ${colorName(move.color)} ${coordLabel(move)}`
+        + (move.note ? ` — ${move.note}` : '');
+      if (move.bookmarked) chip.classList.add('starred');
+      if (move.tags && move.tags.length) chip.classList.add('tagged');
+    }
     chip.addEventListener('click', () => {
-      state.nav.goTo(i + 1);
+      state.nav.goToNode(node);
       syncBoard(false);
     });
-    box.appendChild(chip);
-  });
+    canvas.appendChild(chip);
+  }
+
+  box.appendChild(canvas);
   updateTimelineHighlight();
 }
 
@@ -435,16 +505,19 @@ function renderVariations() {
 }
 
 function updateTimelineHighlight() {
-  const chips = $('timeline').children;
-  for (let i = 0; i < chips.length; i++) {
-    chips[i].classList.toggle('current', i === state.nav.index);
+  const box = $('timeline');
+  const currentId = state.nav.currentNode().id;
+  let current = null;
+  for (const chip of box.querySelectorAll('.tl-chip')) {
+    const on = chip.dataset.nodeId === currentId;
+    chip.classList.toggle('current', on);
+    if (on) current = chip;
   }
-  const current = chips[state.nav.index];
   if (current) {
     // scroll only the timeline strip — scrollIntoView would also scroll the page
-    const box = $('timeline');
     box.scrollTo({
       left: current.offsetLeft - box.clientWidth / 2 + current.offsetWidth / 2,
+      top: current.offsetTop - box.clientHeight / 2 + current.offsetHeight / 2,
       behavior: 'smooth',
     });
   }
