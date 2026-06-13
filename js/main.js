@@ -317,6 +317,7 @@ function syncBoard(animate) {
 
   updateMovePanel();
   updateTimelineHighlight();
+  renderVariations();
 }
 
 function setCaptureCount(id, value, key) {
@@ -386,10 +387,13 @@ function renderTimeline() {
   state.game.moves.forEach((move, i) => {
     const chip = el('button', `tl-chip ${move.color === BLACK ? 'black' : 'white'}`);
     chip.textContent = move.pass ? 'P' : String(i + 1);
+    const forked = state.nav.isBranchPoint(i + 1);
     chip.title = `Move ${i + 1}: ${colorName(move.color)} ${coordLabel(move)}`
+      + (forked ? ' · branch point' : '')
       + (move.note ? ` — ${move.note}` : '');
     if (move.bookmarked) chip.classList.add('starred');
     if (move.tags && move.tags.length) chip.classList.add('tagged');
+    if (forked) chip.classList.add('forked');
     chip.addEventListener('click', () => {
       state.nav.goTo(i + 1);
       syncBoard(false);
@@ -397,6 +401,37 @@ function renderTimeline() {
     box.appendChild(chip);
   });
   updateTimelineHighlight();
+}
+
+/** Show the alternative continuations available at the current position. */
+function renderVariations() {
+  const box = $('variations');
+  const { nav } = state;
+  const vars = nav ? nav.variations() : [];
+  if (!nav || vars.length < 2) {
+    box.hidden = true;
+    box.replaceChildren();
+    return;
+  }
+  box.hidden = false;
+  box.replaceChildren();
+  box.appendChild(el('span', 'variations-label', 'Variations'));
+  const activeNext = nav.index < nav.moveCount ? state.game.moves[nav.index] : null;
+  vars.forEach((node, i) => {
+    const move = node.move;
+    const chip = el('button', `var-chip ${move.color === BLACK ? 'black' : 'white'}`);
+    chip.textContent = move.pass ? 'pass' : coordLabel(move);
+    chip.title = `${colorName(move.color)} ${coordLabel(move)}`;
+    if (move === activeNext) chip.classList.add('on');
+    chip.addEventListener('click', () => {
+      nav.selectVariation(i);
+      sound.tick();
+      persist();
+      syncBoard(true);
+      renderTimeline();
+    });
+    box.appendChild(chip);
+  });
 }
 
 function updateTimelineHighlight() {
@@ -483,15 +518,9 @@ function renderMoments() {
 
 // ------------------------------------------------------------- gameplay
 
-renderer.onPlay = async (x, y) => {
+renderer.onPlay = (x, y) => {
   if (state.replay.playing || !state.nav) return;
   const { nav } = state;
-  if (!nav.atEnd) {
-    const n = nav.moveCount - nav.index;
-    const ok = await confirmDialog(
-      `Place a stone here and discard the ${n} move${n > 1 ? 's' : ''} that come after this position?`);
-    if (!ok) { renderer.clearPending(); return; }
-  }
   const result = nav.play(nextColor(), x, y);
   if (!result.ok) {
     toast(`Illegal move (${result.reason})`);
@@ -506,22 +535,19 @@ renderer.onPlay = async (x, y) => {
   syncBoard(true);
   renderTimeline();
   renderMoments();
+  if (result.branched) toast('New variation created');
 };
 
-async function doPass() {
+function doPass() {
   const { nav } = state;
   if (!nav) return;
-  if (!nav.atEnd) {
-    const n = nav.moveCount - nav.index;
-    const ok = await confirmDialog(
-      `Pass here and discard the ${n} move${n > 1 ? 's' : ''} after this position?`);
-    if (!ok) return;
-  }
-  nav.pass(nextColor());
+  const result = nav.pass(nextColor());
   persist();
   syncBoard(false);
   renderTimeline();
-  toast(`${colorName(nav.currentMove().color)} passes`);
+  toast(result.branched
+    ? 'New variation created (pass)'
+    : `${colorName(nav.currentMove().color)} passes`);
 }
 
 function doUndo() {
@@ -546,7 +572,8 @@ async function doDeleteMove() {
   const { nav } = state;
   if (!nav || nav.index === 0) return;
   const i = nav.index - 1;
-  const ok = await confirmDialog(`Delete move ${i + 1} from the record?`);
+  const ok = await confirmDialog(
+    `Delete move ${i + 1} and the variation that follows it?`);
   if (!ok) return;
   const dropped = nav.deleteMove(i);
   persist();
@@ -554,7 +581,7 @@ async function doDeleteMove() {
   renderTimeline();
   renderMoments();
   toast(dropped > 0
-    ? `Move deleted (${dropped} later move${dropped > 1 ? 's' : ''} became illegal and were removed)`
+    ? `Move deleted (${dropped} later move${dropped > 1 ? 's' : ''} removed)`
     : 'Move deleted');
 }
 

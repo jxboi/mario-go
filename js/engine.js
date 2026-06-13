@@ -143,9 +143,47 @@ export function generateId() {
   return `g${Date.now().toString(36)}${idCounter.toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 }
 
+/**
+ * A game record is a tree of variations. Each node holds one move and a
+ * list of child continuations; `children[0]` is the "main line". The root
+ * node carries no move (it represents the empty board).
+ *   node: { id, move, children: [] }
+ */
+export function createNode(move = null) {
+  return { id: generateId(), move, children: [] };
+}
+
+/** Build a linear tree (root → child → …) from a flat move list. */
+export function movesToTree(moves) {
+  const root = createNode(null);
+  let cur = root;
+  for (const move of (moves || [])) {
+    const node = createNode(move);
+    cur.children.push(node);
+    cur = node;
+  }
+  return root;
+}
+
+/** The main line (following children[0]) as a flat list of moves. */
+export function mainlineMoves(root) {
+  const out = [];
+  let n = root;
+  while (n && n.children && n.children.length) {
+    n = n.children[0];
+    out.push(n.move);
+  }
+  return out;
+}
+
 /** Create a fresh game record. */
 export function createGame(meta = {}) {
   const now = new Date();
+  // The tree is the source of truth; `moves` is a derived mirror of the
+  // main line kept for the many read-only consumers (cards, summary, SGF).
+  const tree = (meta.tree && Array.isArray(meta.tree.children))
+    ? meta.tree
+    : movesToTree(meta.moves);
   return {
     id: meta.id || generateId(),
     size: meta.size || 19,
@@ -160,28 +198,61 @@ export function createGame(meta = {}) {
     notes: meta.notes || '',
     thoughts: meta.thoughts || '',
     reviewLater: !!meta.reviewLater,
-    /** moves: { pass?, color, x?, y?, note?, tags?, bookmarked? } */
-    moves: Array.isArray(meta.moves) ? meta.moves : [],
+    /** move: { pass?, color, x?, y?, note?, tags?, bookmarked? } */
+    tree,
+    /** derived main line of `tree` */
+    moves: mainlineMoves(tree),
     createdAt: meta.createdAt || now.toISOString(),
     updatedAt: meta.updatedAt || now.toISOString(),
   };
 }
 
 /**
- * Navigator over a game record. Replays the move list into per-move
- * snapshot "frames" so jumping anywhere is O(1), and re-validates the
- * whole record after any edit (dropping moves that became illegal).
+ * Navigator over a game record's variation tree. Tracks the "active line"
+ * (a path of nodes from the root to a leaf) and replays it into per-move
+ * snapshot "frames" so jumping anywhere is O(1). Playing a move that
+ * differs from the existing continuation creates a new branch beside it
+ * rather than discarding the old line.
  */
 export class Navigator {
   constructor(game) {
     this.game = game;
-    this.index = 0; // number of moves currently applied (0..moves.length)
+    if (!game.tree || !Array.isArray(game.tree.children)) {
+      game.tree = movesToTree(game.moves);
+    }
+    this.tree = game.tree;
+    this.index = 0; // number of moves currently applied (0..line length)
     this.redoStack = [];
     this.rebuild();
   }
 
-  /** Replay game.moves from scratch; drops moves that are illegal. */
+  /** Follow children[0] from `node` to its deepest leaf. */
+  mainlineFrom(node) {
+    const out = [];
+    let n = node;
+    while (n.children && n.children.length) {
+      n = n.children[0];
+      out.push(n);
+    }
+    return out;
+  }
+
+  /**
+   * Reset the active line to the tree's main line and replay it. Called on
+   * construction and after structural edits (deleteMove).
+   */
   rebuild() {
+    this.path = [this.tree, ...this.mainlineFrom(this.tree)];
+    this.replayPath();
+    this.index = Math.min(this.index, this.moveCount);
+  }
+
+  /**
+   * Replay the current `path` into frames/hashes, pruning the tail (and its
+   * subtree) at the first move that turns out illegal. Keeps the derived
+   * `game.moves` mirror in sync with the active line.
+   */
+  replayPath() {
     const size = this.game.size;
     let board = new Board(size);
     const hashes = [board.hash()];
@@ -192,14 +263,15 @@ export class Navigator {
       lastMove: null,
       captures: [],
     }];
-    const validMoves = [];
-    let dropped = 0;
+    const validNodes = [this.tree];
     let capturedByBlack = 0;
     let capturedByWhite = 0;
 
-    for (const move of this.game.moves) {
+    for (let k = 1; k < this.path.length; k++) {
+      const node = this.path[k];
+      const move = node.move;
       if (move.pass) {
-        validMoves.push(move);
+        validNodes.push(node);
         frames.push({
           grid: board.grid.slice(),
           capturedByBlack,
@@ -211,14 +283,17 @@ export class Navigator {
       }
       const result = computePlacement(board, move.color, move.x, move.y, hashes);
       if (!result.legal) {
-        dropped += 1;
-        continue;
+        // prune the illegal node (and everything after it) from the tree
+        const parent = this.path[k - 1];
+        const idx = parent.children.indexOf(node);
+        if (idx >= 0) parent.children.splice(idx, 1);
+        break;
       }
       board = result.board;
       hashes.push(result.hash);
       if (move.color === BLACK) capturedByBlack += result.captures.length;
       else capturedByWhite += result.captures.length;
-      validMoves.push(move);
+      validNodes.push(node);
       frames.push({
         grid: board.grid.slice(),
         capturedByBlack,
@@ -228,11 +303,10 @@ export class Navigator {
       });
     }
 
-    this.game.moves = validMoves;
+    this.path = validNodes;
     this.frames = frames;
     this.hashes = hashes;
-    this.index = Math.min(this.index, validMoves.length);
-    return dropped;
+    this.game.moves = validNodes.slice(1).map((n) => n.move);
   }
 
   get moveCount() {
@@ -289,110 +363,113 @@ export class Navigator {
     return this.hashes.slice(0, placements + 1);
   }
 
+  /** Re-point the active line through `node`, extending to its main line. */
+  followFromCurrent(node) {
+    this.path = this.path.slice(0, this.index + 1);
+    this.path.push(node, ...this.mainlineFrom(node));
+    this.replayPath();
+    this.index += 1;
+  }
+
   /**
-   * Play a stone at the current index. If not at the end of the record,
-   * the remaining moves are truncated (caller should confirm first).
-   * Returns { ok, reason?, move?, captures? }.
+   * Play a stone at the current index. If the current node already has a
+   * matching continuation it is re-selected; otherwise a new branch is
+   * created beside any existing continuations (none are discarded).
+   * Returns { ok, reason?, move?, captures?, branched? }.
    */
   play(color, x, y) {
     const result = this.tryPlacement(color, x, y);
     if (!result.legal) return { ok: false, reason: result.reason };
-    if (!this.atEnd) this.truncateToIndex();
-    const move = { color, x, y, tags: [], note: '', bookmarked: false };
-    this.game.moves.push(move);
+    const cur = this.path[this.index];
+    let branched = false;
+    let child = cur.children.find((c) => !c.move.pass
+      && c.move.color === color && c.move.x === x && c.move.y === y);
+    if (!child) {
+      if (cur.children.length > 0) branched = true;
+      child = createNode({ color, x, y, tags: [], note: '', bookmarked: false });
+      cur.children.push(child);
+    }
     this.redoStack = [];
-    this.appendFrame(move, result);
-    this.index = this.moveCount;
-    return { ok: true, move, captures: result.captures };
+    this.followFromCurrent(child);
+    return { ok: true, move: child.move, captures: result.captures, branched };
   }
 
   pass(color) {
-    if (!this.atEnd) this.truncateToIndex();
-    const move = { pass: true, color, tags: [], note: '', bookmarked: false };
-    this.game.moves.push(move);
+    const cur = this.path[this.index];
+    let branched = false;
+    let child = cur.children.find((c) => c.move.pass && c.move.color === color);
+    if (!child) {
+      if (cur.children.length > 0) branched = true;
+      child = createNode({ pass: true, color, tags: [], note: '', bookmarked: false });
+      cur.children.push(child);
+    }
     this.redoStack = [];
-    const prev = this.frames[this.frames.length - 1];
-    this.frames.push({
-      grid: prev.grid.slice(),
-      capturedByBlack: prev.capturedByBlack,
-      capturedByWhite: prev.capturedByWhite,
-      lastMove: move,
-      captures: [],
-    });
-    this.index = this.moveCount;
-    return { ok: true, move };
+    this.followFromCurrent(child);
+    return { ok: true, move: child.move, branched };
   }
 
-  appendFrame(move, result) {
-    const prev = this.frames[this.frames.length - 1];
-    this.hashes.push(result.hash);
-    this.frames.push({
-      grid: result.board.grid.slice(),
-      capturedByBlack: prev.capturedByBlack + (move.color === BLACK ? result.captures.length : 0),
-      capturedByWhite: prev.capturedByWhite + (move.color === WHITE ? result.captures.length : 0),
-      lastMove: move,
-      captures: result.captures,
-    });
+  /** The continuations available at the current node (alternative branches). */
+  variations() {
+    return this.path[this.index].children;
   }
 
-  truncateToIndex() {
-    this.game.moves.length = this.index;
-    this.frames.length = this.index + 1;
-    let placements = 0;
-    for (const m of this.game.moves) if (!m.pass) placements += 1;
-    this.hashes.length = placements + 1;
+  /** Whether the move at active-line position `n` (1-based) has siblings. */
+  isBranchPoint(n) {
+    const parent = this.path[n - 1];
+    return !!parent && parent.children.length > 1;
+  }
+
+  /** Make child `childIndex` of the current node the active continuation. */
+  selectVariation(childIndex) {
+    const cur = this.path[this.index];
+    if (childIndex < 0 || childIndex >= cur.children.length) return null;
     this.redoStack = [];
+    this.followFromCurrent(cur.children[childIndex]);
+    return this.currentMove();
   }
 
-  /** Undo: remove the last move (it can be redone). */
+  /** Undo: remove the last move of the active line (it can be redone). */
   undo() {
     if (this.moveCount === 0) return null;
-    const move = this.game.moves[this.moveCount - 1];
-    this.redoStack.push(move);
-    this.game.moves.length = this.moveCount - 1;
-    this.frames.length = this.game.moves.length + 1;
-    if (!move.pass) this.hashes.length -= 1;
+    const node = this.path[this.path.length - 1];
+    const parent = this.path[this.path.length - 2];
+    const childIndex = parent.children.indexOf(node);
+    if (childIndex >= 0) parent.children.splice(childIndex, 1);
+    this.redoStack.push({ parent, node, childIndex });
+    this.path.pop();
+    this.replayPath();
     this.index = Math.min(this.index, this.moveCount);
-    return move;
+    return node.move;
   }
 
   redo() {
     if (this.redoStack.length === 0) return null;
-    const move = this.redoStack.pop();
-    if (move.pass) {
-      const prev = this.frames[this.frames.length - 1];
-      this.game.moves.push(move);
-      this.frames.push({
-        grid: prev.grid.slice(),
-        capturedByBlack: prev.capturedByBlack,
-        capturedByWhite: prev.capturedByWhite,
-        lastMove: move,
-        captures: [],
-      });
-    } else {
-      const board = new Board(this.game.size, this.frames[this.frames.length - 1].grid);
-      const result = computePlacement(board, move.color, move.x, move.y, this.hashes);
-      if (!result.legal) return null;
-      this.game.moves.push(move);
-      this.appendFrame(move, result);
-    }
+    const { parent, node, childIndex } = this.redoStack.pop();
+    const at = childIndex >= 0 && childIndex <= parent.children.length
+      ? childIndex : parent.children.length;
+    parent.children.splice(at, 0, node);
+    this.path.push(node, ...this.mainlineFrom(node));
+    this.replayPath();
     this.index = this.moveCount;
-    return move;
+    return node.move;
   }
 
   /**
-   * Delete the move at position `moveIndex` (0-based). The rest of the
-   * record is re-validated; any later moves that become illegal are
-   * dropped. Returns the number of additional moves dropped.
+   * Delete the move at active-line position `moveIndex` (0-based) and the
+   * variation that follows it. The active line falls back to the main line.
+   * Returns the number of additional moves removed from the active line.
    */
   deleteMove(moveIndex) {
     if (moveIndex < 0 || moveIndex >= this.moveCount) return 0;
-    this.game.moves.splice(moveIndex, 1);
+    const node = this.path[moveIndex + 1];
+    const parent = this.path[moveIndex];
+    const idx = parent.children.indexOf(node);
+    if (idx >= 0) parent.children.splice(idx, 1);
     this.redoStack = [];
-    const before = this.game.moves.length;
+    const before = this.moveCount;
     this.rebuild();
     this.index = Math.min(moveIndex, this.moveCount);
-    return before - this.game.moves.length;
+    return Math.max(0, before - this.moveCount - 1);
   }
 }
 
@@ -403,19 +480,34 @@ export function finalFrame(game) {
   return nav.frame();
 }
 
-/** Moves that the player marked as worth revisiting. */
+/** Moves (across every branch) that the player marked as worth revisiting. */
 export function keyMoments(game) {
   const out = [];
-  game.moves.forEach((move, i) => {
-    const tagged = move.tags && move.tags.length > 0;
-    if (move.bookmarked || tagged || (move.note && move.note.trim())) {
-      out.push({ move, number: i + 1 });
+  const root = game.tree && game.tree.children ? game.tree : movesToTree(game.moves);
+  const walk = (node, depth) => {
+    for (const child of node.children) {
+      const move = child.move;
+      const tagged = move.tags && move.tags.length > 0;
+      if (move.bookmarked || tagged || (move.note && move.note.trim())) {
+        out.push({ move, number: depth + 1 });
+      }
+      walk(child, depth + 1);
     }
-  });
+  };
+  walk(root, 0);
   return out;
 }
 
 export function hasReviewLater(game) {
-  return game.reviewLater
-    || game.moves.some((m) => m.tags && m.tags.includes('review later'));
+  if (game.reviewLater) return true;
+  const root = game.tree && game.tree.children ? game.tree : movesToTree(game.moves);
+  let found = false;
+  const walk = (node) => {
+    for (const child of node.children) {
+      if (child.move.tags && child.move.tags.includes('review later')) found = true;
+      walk(child);
+    }
+  };
+  walk(root);
+  return found;
 }
