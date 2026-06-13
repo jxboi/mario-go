@@ -341,6 +341,41 @@ export class Navigator {
     return this.frame();
   }
 
+  /** The tree node at the current index (the root when index === 0). */
+  currentNode() {
+    return this.path[this.index];
+  }
+
+  /** DFS from the root for `target`; returns [root, …, target] or null. */
+  nodePath(target) {
+    const dfs = (node, acc) => {
+      acc.push(node);
+      if (node === target) return acc.slice();
+      for (const child of node.children) {
+        const found = dfs(child, acc);
+        if (found) return found;
+      }
+      acc.pop();
+      return null;
+    };
+    return dfs(this.tree, []);
+  }
+
+  /**
+   * Make `target` (any node in the tree) the current position. The active
+   * line is routed through it and extended along its main line so the user
+   * can keep stepping forward.
+   */
+  goToNode(target) {
+    const path = this.nodePath(target);
+    if (!path) return null;
+    const depth = path.length - 1;
+    this.path = [...path, ...this.mainlineFrom(target)];
+    this.replayPath();
+    this.index = Math.min(depth, this.moveCount);
+    return this.frame();
+  }
+
   /**
    * Validate a placement at the current index without committing it.
    * Returns the computePlacement result.

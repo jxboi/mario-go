@@ -146,6 +146,24 @@ function assert(cond, msg) {
   assert(nav.variations().length === 1, 'no duplicate child added');
 }
 
+// ----- navigate to a node on another branch -----
+{
+  console.log('goToNode:');
+  const game = createGame({ size: 9 });
+  const nav = new Navigator(game);
+  nav.play(BLACK, 0, 0);
+  nav.play(WHITE, 1, 1); // main-line move 2
+  nav.goTo(1);
+  nav.play(WHITE, 5, 5); // branch move 2 (now active)
+  // tree: root -> B(0,0) -> { W(1,1), W(5,5) }
+  const other = game.tree.children[0].children.find((c) => c.move.x === 1 && c.move.y === 1);
+  nav.goToNode(other);
+  assert(nav.index === 2, 'index set to the node depth');
+  assert(nav.currentNode() === other, 'currentNode is the target node');
+  assert(nav.board().get(1, 1) === WHITE && nav.board().get(5, 5) === EMPTY,
+    'board reflects the chosen branch');
+}
+
 // ----- delete prunes the move and the line that follows it -----
 {
   console.log('delete:');
