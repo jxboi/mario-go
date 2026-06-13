@@ -346,6 +346,25 @@ export class Navigator {
     return this.path[this.index];
   }
 
+  /** True when the active line follows children[0] all the way from the root. */
+  onMainLine() {
+    let node = this.tree;
+    for (let i = 1; i < this.path.length; i++) {
+      if (node.children[0] !== this.path[i]) return false;
+      node = this.path[i];
+    }
+    return true;
+  }
+
+  /** Route the active line back to the main line, keeping the current depth. */
+  goToMainLine() {
+    const depth = this.index;
+    this.path = [this.tree, ...this.mainlineFrom(this.tree)];
+    this.replayPath();
+    this.index = Math.min(depth, this.moveCount);
+    return this.frame();
+  }
+
   /** DFS from the root for `target`; returns [root, …, target] or null. */
   nodePath(target) {
     const dfs = (node, acc) => {
