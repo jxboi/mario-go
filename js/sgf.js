@@ -7,7 +7,9 @@
  *   HO[1]        standard "hotspot" property, used for bookmarks
  */
 
-import { BLACK, WHITE, createGame } from './engine.js';
+import {
+  BLACK, WHITE, createGame, createNode, movesToTree, mainlineMoves,
+} from './engine.js';
 
 const COORDS = 'abcdefghijklmnopqrstuvwxyz';
 
@@ -45,96 +47,171 @@ export function gameToSgf(game) {
   if (rootComment) props.push(`C[${escapeSgf(rootComment)}]`);
 
   let out = `(;${props.join('')}`;
-  for (const move of game.moves) {
-    const key = move.color === BLACK ? 'B' : 'W';
-    const point = move.pass ? '' : toSgfPoint(move.x, move.y);
-    out += `\n;${key}[${point}]`;
-    if (move.note && move.note.trim()) out += `C[${escapeSgf(move.note)}]`;
-    if (move.tags && move.tags.length) out += `TG[${escapeSgf(move.tags.join(','))}]`;
-    if (move.bookmarked) out += 'HO[1]';
-  }
+  const root = game.tree && game.tree.children ? game.tree : movesToTree(game.moves);
+  out += serializeChildren(root.children);
   out += ')\n';
   return out;
 }
 
-/**
- * Minimal SGF parser. Follows the main line (first child at every
- * branch) and ignores properties it does not understand.
- * Returns a list of nodes: [{ B: ['pd'], C: ['...'], ... }, ...]
- */
-function parseNodes(text) {
-  const nodes = [];
-  let i = 0;
-  let depth = 0;
-  let mainLine = true;
-  const n = text.length;
+/** One node's move + journal extensions (no leading newline). */
+function moveToSgf(move) {
+  const key = move.color === BLACK ? 'B' : 'W';
+  const point = move.pass ? '' : toSgfPoint(move.x, move.y);
+  let s = `;${key}[${point}]`;
+  if (move.note && move.note.trim()) s += `C[${escapeSgf(move.note)}]`;
+  if (move.tags && move.tags.length) s += `TG[${escapeSgf(move.tags.join(','))}]`;
+  if (move.bookmarked) s += 'HO[1]';
+  return s;
+}
 
-  const skipWs = () => { while (i < n && /\s/.test(text[i])) i++; };
-
-  while (i < n) {
-    skipWs();
-    const ch = text[i];
-    if (ch === '(') {
-      depth += 1;
-      // only the first branch at each fork is the main line
-      i += 1;
-    } else if (ch === ')') {
-      depth -= 1;
-      mainLine = false; // anything after a close-paren is a sibling variation
-      i += 1;
-    } else if (ch === ';') {
-      i += 1;
-      if (!mainLine) { // skip variation nodes entirely
-        continue;
-      }
-      const node = {};
-      while (i < n) {
-        skipWs();
-        const m = /^[A-Za-z]+/.exec(text.slice(i, i + 12));
-        if (!m) break;
-        const ident = m[0].toUpperCase();
-        i += m[0].length;
-        skipWs();
-        const values = [];
-        while (text[i] === '[') {
-          i += 1;
-          let value = '';
-          while (i < n && text[i] !== ']') {
-            if (text[i] === '\\' && i + 1 < n) {
-              value += text[i + 1];
-              i += 2;
-            } else {
-              value += text[i];
-              i += 1;
-            }
-          }
-          i += 1; // closing ]
-          values.push(value);
-          skipWs();
-        }
-        node[ident] = (node[ident] || []).concat(values);
-      }
-      nodes.push(node);
-    } else if (ch === undefined) {
-      break;
-    } else {
-      i += 1;
-    }
-    if (depth === 0 && nodes.length > 0) break;
-  }
-  return nodes;
+/** Serialize a node and its continuation (recursing into variations). */
+function serializeNode(node) {
+  let s = `\n${moveToSgf(node.move)}`;
+  return s + serializeChildren(node.children);
 }
 
 /**
- * Parse SGF text into a game record. Throws Error with a readable
- * message when the content is not usable.
+ * Serialize a list of child nodes. A single child continues the current
+ * sequence; multiple children are each wrapped in their own ( … ) branch.
+ */
+function serializeChildren(children) {
+  if (children.length === 0) return '';
+  if (children.length === 1) return serializeNode(children[0]);
+  return children.map((c) => `(${serializeNode(c)})`).join('');
+}
+
+/**
+ * Recursive-descent SGF parser. Returns the collection of game trees;
+ * each tree is { nodes: [{ B:['pd'], ... }], children: [tree, ...] }.
+ * Properties that are not understood are simply kept as raw values.
+ */
+function parseCollection(text) {
+  let i = 0;
+  const n = text.length;
+  const skipWs = () => { while (i < n && /\s/.test(text[i])) i++; };
+
+  function parseNode() {
+    const node = {};
+    skipWs();
+    while (i < n) {
+      const m = /^[A-Za-z]+/.exec(text.slice(i));
+      if (!m) break;
+      const ident = m[0].toUpperCase();
+      i += m[0].length;
+      skipWs();
+      const values = [];
+      while (text[i] === '[') {
+        i += 1;
+        let value = '';
+        while (i < n && text[i] !== ']') {
+          if (text[i] === '\\' && i + 1 < n) {
+            value += text[i + 1];
+            i += 2;
+          } else {
+            value += text[i];
+            i += 1;
+          }
+        }
+        i += 1; // closing ]
+        values.push(value);
+        skipWs();
+      }
+      node[ident] = (node[ident] || []).concat(values);
+      skipWs();
+    }
+    return node;
+  }
+
+  function parseGameTree() {
+    skipWs();
+    if (text[i] !== '(') return null;
+    i += 1; // consume (
+    const nodes = [];
+    skipWs();
+    while (text[i] === ';') {
+      i += 1; // consume ;
+      nodes.push(parseNode());
+      skipWs();
+    }
+    const children = [];
+    while (text[i] === '(') {
+      const child = parseGameTree();
+      if (child) children.push(child);
+      skipWs();
+    }
+    if (text[i] === ')') i += 1; // consume )
+    return { nodes, children };
+  }
+
+  const trees = [];
+  skipWs();
+  while (text[i] === '(') {
+    const tree = parseGameTree();
+    if (tree) trees.push(tree);
+    skipWs();
+  }
+  return trees;
+}
+
+/** Convert one SGF node's move properties into a journal move, or null. */
+function sgfNodeToMove(node, size) {
+  let color = null;
+  let value = null;
+  if (node.B) { color = BLACK; value = node.B[0]; }
+  else if (node.W) { color = WHITE; value = node.W[0]; }
+  if (color === null) return null;
+
+  const move = {
+    color,
+    tags: [],
+    note: (node.C && node.C[0]) || '',
+    bookmarked: !!node.HO,
+  };
+  if (node.TG && node.TG[0]) {
+    move.tags = node.TG[0].split(',').map((t) => t.trim()).filter(Boolean);
+  }
+  // Empty value, or "tt" on boards <= 19, means pass.
+  const point = fromSgfPoint(value, size);
+  if (!point || (value === 'tt' && size <= 19)) {
+    move.pass = true;
+  } else {
+    move.x = point.x;
+    move.y = point.y;
+  }
+  return move;
+}
+
+/**
+ * Attach an SGF game-tree's node sequence (and its variation subtrees) to
+ * `parent` in our move tree. Non-move nodes are skipped.
+ */
+function attachSequence(parent, nodes, childTrees, size) {
+  let cur = parent;
+  for (const sgfNode of nodes) {
+    const move = sgfNodeToMove(sgfNode, size);
+    if (!move) continue;
+    const node = createNode(move);
+    cur.children.push(node);
+    cur = node;
+  }
+  for (const child of childTrees) {
+    attachSequence(cur, child.nodes, child.children, size);
+  }
+}
+
+/**
+ * Parse SGF text into a game record, preserving variations as branches.
+ * Throws Error with a readable message when the content is not usable.
  */
 export function sgfToGame(text) {
-  const nodes = parseNodes(text);
-  if (nodes.length === 0) throw new Error('No SGF nodes found in file.');
+  const trees = parseCollection(text);
+  if (trees.length === 0 || trees[0].nodes.length === 0) {
+    throw new Error('No SGF nodes found in file.');
+  }
 
-  const root = nodes[0];
-  const first = (key) => (root[key] && root[key][0]) || '';
+  const gtree = trees[0];
+  const rootNode = gtree.nodes[0];
+  const first = (key) => (rootNode[key] && rootNode[key][0]) || '';
   const size = parseInt(first('SZ'), 10) || 19;
   if (![9, 13, 19].includes(size)) {
     throw new Error(`Unsupported board size ${size} (supported: 9, 13, 19).`);
@@ -154,35 +231,11 @@ export function sgfToGame(text) {
   });
 
   // Root node may itself contain a move; usually moves start at node 1.
-  const moveNodes = root.B || root.W ? nodes : nodes.slice(1);
+  const moveNodes = rootNode.B || rootNode.W ? gtree.nodes : gtree.nodes.slice(1);
+  const root = createNode(null);
+  attachSequence(root, moveNodes, gtree.children, size);
 
-  for (const node of moveNodes) {
-    let color = null;
-    let value = null;
-    if (node.B) { color = BLACK; value = node.B[0]; }
-    else if (node.W) { color = WHITE; value = node.W[0]; }
-    if (color === null) continue;
-
-    const move = {
-      color,
-      tags: [],
-      note: (node.C && node.C[0]) || '',
-      bookmarked: !!node.HO,
-    };
-    if (node.TG && node.TG[0]) {
-      move.tags = node.TG[0].split(',').map((t) => t.trim()).filter(Boolean);
-    }
-
-    // Empty value, or "tt" on boards <= 19, means pass.
-    const point = fromSgfPoint(value, size);
-    if (!point || (value === 'tt' && size <= 19)) {
-      move.pass = true;
-    } else {
-      move.x = point.x;
-      move.y = point.y;
-    }
-    game.moves.push(move);
-  }
-
+  game.tree = root;
+  game.moves = mainlineMoves(root);
   return game;
 }

@@ -32,8 +32,9 @@ browser (localStorage) — no account, no network needed.
 - Place stones move by move with full rules enforcement
   (captures, suicide, ko / position repetition)
 - Pass moves, manual stone-color override (Auto / ● / ○)
-- Undo / redo, delete any move (later moves are re-validated),
-  place a stone mid-game to branch from that position
+- Undo / redo, delete a move (and the variation that follows it)
+- Place a stone mid-game to branch into a new variation — the existing
+  continuation is kept, and you can switch between branches
 - Continue an unfinished game any time — everything autosaves
 
 **Reviewing**
@@ -115,4 +116,4 @@ node test/engine.test.mjs
 ```
 
 Covers captures, suicide, ko, undo/redo, pass, navigation, mid-game
-truncation, delete cascades and SGF round-trips.
+branching / variations, deletes and SGF round-trips (including variations).

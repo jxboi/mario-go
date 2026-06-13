@@ -649,6 +649,55 @@ button:disabled { opacity: 0.4; cursor: default; }
   border-radius: 50%;
   background: var(--vermillion);
 }
+.tl-chip.forked {
+  border-color: var(--gold);
+}
+.tl-chip.forked::after {
+  content: '⑂';
+  position: absolute;
+  top: -8px;
+  left: -5px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--gold-bright);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+/* variations bar — alternative continuations at the current position */
+.variations {
+  margin: 0 auto 8px;
+  max-width: min(86vh, 720px);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 4px;
+}
+.variations-label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-right: 2px;
+}
+.var-chip {
+  flex-shrink: 0;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 13px;
+  border: 1.5px solid var(--card-border);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  background: var(--card);
+  color: var(--ink);
+}
+.var-chip.black { border-color: #2a2a30; }
+.var-chip.white { border-color: #cbc4b2; }
+.var-chip.on {
+  border-color: var(--gold-bright);
+  box-shadow: 0 0 0 2px rgba(212, 160, 35, 0.25);
+  color: var(--gold-bright);
+}
 
 /* side panel */
 
@@ -810,6 +859,7 @@ body.cinematic::after {
 body.cinematic #app-header,
 body.cinematic .side-panel,
 body.cinematic .controls,
+body.cinematic .variations,
 body.cinematic .timeline {
   opacity: 0.12;
   pointer-events: none;

@@ -106,21 +106,47 @@ function assert(cond, msg) {
   assert(nav.board().get(2, 2) === BLACK, 'goTo end');
 }
 
-// ----- truncation when playing mid-game -----
+// ----- branching when playing mid-game -----
 {
-  console.log('truncation:');
+  console.log('branching:');
   const game = createGame({ size: 9 });
   const nav = new Navigator(game);
   nav.play(BLACK, 0, 0);
   nav.play(WHITE, 1, 1);
   nav.play(BLACK, 2, 2);
   nav.goTo(1);
-  nav.play(WHITE, 5, 5);
-  assert(nav.moveCount === 2, 'later moves truncated');
+  const res = nav.play(WHITE, 5, 5);
+  assert(res.ok && res.branched === true, 'mid-game move flagged as a new branch');
+  assert(nav.moveCount === 2, 'active line is the new branch');
   assert(nav.board().get(5, 5) === WHITE && nav.board().get(1, 1) === EMPTY, 'new line applied');
+  // the original continuation is preserved as a sibling, not discarded
+  nav.goTo(1);
+  const vars = nav.variations();
+  assert(vars.length === 2, 'both continuations preserved at the branch point');
+  assert(nav.isBranchPoint(2), 'move 2 reported as a branch point');
+  // switching back restores the original W(1,1) line and its later move
+  const sel = vars.findIndex((c) => c.move.x === 1 && c.move.y === 1);
+  nav.selectVariation(sel);
+  assert(nav.board().get(1, 1) === WHITE, 'original variation re-selected');
+  nav.goTo(nav.moveCount);
+  assert(nav.board().get(2, 2) === BLACK, 'original later move still present');
 }
 
-// ----- delete move with revalidation -----
+// ----- selecting an existing variation by replaying its move -----
+{
+  console.log('reselect:');
+  const game = createGame({ size: 9 });
+  const nav = new Navigator(game);
+  nav.play(BLACK, 0, 0);
+  nav.play(WHITE, 1, 1);
+  nav.goTo(1);
+  const res = nav.play(WHITE, 1, 1); // same move as the existing continuation
+  assert(res.ok && !res.branched, 'replaying the same move does not create a duplicate branch');
+  nav.goTo(1);
+  assert(nav.variations().length === 1, 'no duplicate child added');
+}
+
+// ----- delete prunes the move and the line that follows it -----
 {
   console.log('delete:');
   const game = createGame({ size: 9 });
@@ -129,12 +155,13 @@ function assert(cond, msg) {
   nav.play(WHITE, 5, 5);
   nav.play(BLACK, 0, 0 + 1); // B(0,1)
   nav.goTo(3);
-  const dropped = nav.deleteMove(1); // remove W(5,5)
-  assert(dropped === 0 && nav.moveCount === 2, 'simple delete keeps later moves');
-  assert(nav.game.moves[1].x === 0 && nav.game.moves[1].y === 1, 'later move kept');
+  const dropped = nav.deleteMove(1); // remove W(5,5) and the move after it
+  assert(nav.moveCount === 1, 'delete removes the move and its continuation');
+  assert(dropped === 1, 'reports the one trailing move removed');
+  assert(nav.game.moves[0].x === 0 && nav.game.moves[0].y === 0, 'earlier move kept');
 }
 
-// ----- delete that makes a later move illegal -----
+// ----- delete a capturing move restores the captured stone -----
 {
   console.log('delete cascade:');
   const game = createGame({ size: 9 });
@@ -147,16 +174,13 @@ function assert(cond, msg) {
   nav.play(BLACK, 5, 4);
   nav.play(WHITE, 8, 7);
   nav.play(BLACK, 4, 5); // captures W(4,4)
-  nav.play(WHITE, 4, 4); // W replays into the now-empty point (1 liberty? no -
-  // surrounded on 4 sides by black = suicide... so use a different point)
-  // The above would be illegal; check engine said so:
+  nav.play(WHITE, 4, 4); // W replays into the surrounded point = suicide, rejected
   assert(nav.moveCount === 7, 'suicide replay was rejected by play()');
   nav.play(WHITE, 2, 2);
-  // deleting black's first surround stone makes the capture move still legal,
-  // but deleting the capture itself is the interesting case:
-  const before = nav.moveCount;
-  nav.deleteMove(6); // remove the capturing move B(4,5)
-  assert(nav.moveCount === before - 1, 'delete capture move');
+  const before = nav.moveCount; // 8
+  const dropped = nav.deleteMove(6); // remove the capturing move B(4,5) + the line after
+  assert(nav.moveCount === 6, 'capture move and its continuation removed');
+  assert(dropped === 1, 'one trailing move removed besides the deleted one');
   assert(nav.frames[nav.frames.length - 1].grid[4 * 9 + 4] === WHITE, 'white stone restored after delete');
 }
 
@@ -202,10 +226,35 @@ function assert(cond, msg) {
 ;B[ee];W[cc]C[nice move];B[](;W[gg])(;W[hh]))`;
   const game = sgfToGame(external);
   assert(game.size === 9 && game.playerWhite === 'Bar', 'external metadata');
-  assert(game.moves.length === 4, 'main line only (variations ignored)');
+  assert(game.moves.length === 4, 'main line follows the first variation');
   assert(game.moves[2].pass === true, 'B[] read as pass');
   assert(game.moves[3].x === 6 && game.moves[3].y === 6, 'first variation followed');
   assert(game.moves[1].note === 'nice move', 'external comment kept');
+  // the second variation is preserved as a branch, not dropped
+  const navExt = new Navigator(game);
+  navExt.goTo(3);
+  const vExt = navExt.variations();
+  assert(vExt.length === 2, 'both variations imported as branches');
+  assert(vExt.some((c) => c.move.x === 7 && c.move.y === 7), 'second variation (hh) kept');
+}
+
+// ----- SGF round-trip preserves variations -----
+{
+  console.log('sgf variations:');
+  const game = createGame({ size: 9 });
+  const nav = new Navigator(game);
+  nav.play(BLACK, 3, 3);
+  nav.play(WHITE, 5, 5);
+  nav.goTo(1);
+  nav.play(WHITE, 6, 6); // a second continuation for white -> branch
+  const sgf = gameToSgf(game);
+  const back = sgfToGame(sgf);
+  const nav2 = new Navigator(back);
+  nav2.goTo(1);
+  const vars = nav2.variations();
+  assert(vars.length === 2, 'both branches survive SGF round-trip');
+  const coords = vars.map((c) => `${c.move.x},${c.move.y}`).sort();
+  assert(coords.join('|') === '5,5|6,6', 'both branch moves round-tripped');
 }
 
 // ----- key moments / final frame -----
