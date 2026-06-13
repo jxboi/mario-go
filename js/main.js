@@ -478,13 +478,28 @@ function renderVariations() {
   const box = $('variations');
   const { nav } = state;
   const vars = nav ? nav.variations() : [];
-  if (!nav || vars.length < 2) {
+  const offMain = !!nav && !nav.onMainLine();
+  if (!nav || (vars.length < 2 && !offMain)) {
     box.hidden = true;
     box.replaceChildren();
     return;
   }
   box.hidden = false;
   box.replaceChildren();
+
+  if (offMain) {
+    const back = el('button', 'var-chip main-line', '↩ Main line');
+    back.title = 'Return to the main line (M)';
+    back.addEventListener('click', () => {
+      nav.goToMainLine();
+      sound.tick();
+      persist();
+      syncBoard(true);
+    });
+    box.appendChild(back);
+  }
+  if (vars.length < 2) return;
+
   box.appendChild(el('span', 'variations-label', 'Variations'));
   const activeNext = nav.index < nav.moveCount ? state.game.moves[nav.index] : null;
   vars.forEach((node, i) => {
@@ -1118,6 +1133,9 @@ function bindEvents() {
       case 'p': case 'P': doPass(); break;
       case 'n': case 'N': $('btn-numbers').click(); break;
       case 'b': case 'B': $('btn-bookmark').click(); break;
+      case 'm': case 'M':
+        if (!state.nav.onMainLine()) { state.nav.goToMainLine(); sound.tick(); syncBoard(true); }
+        break;
       default: break;
     }
   });

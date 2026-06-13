@@ -699,6 +699,11 @@ button:disabled { opacity: 0.4; cursor: default; }
   box-shadow: 0 0 0 2px rgba(212, 160, 35, 0.25);
   color: var(--gold-bright);
 }
+.var-chip.main-line {
+  border-color: var(--gold);
+  color: var(--gold-bright);
+  margin-right: 6px;
+}
 
 /* side panel */
 

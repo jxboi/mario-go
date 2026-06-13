@@ -162,6 +162,13 @@ function assert(cond, msg) {
   assert(nav.currentNode() === other, 'currentNode is the target node');
   assert(nav.board().get(1, 1) === WHITE && nav.board().get(5, 5) === EMPTY,
     'board reflects the chosen branch');
+  // the W(1,1) line is the main line (children[0]); the W(5,5) branch is not
+  assert(nav.onMainLine(), 'W(1,1) continuation is the main line');
+  nav.goToNode(game.tree.children[0].children[1]); // the W(5,5) branch
+  assert(!nav.onMainLine(), 'off the main line on the variation');
+  nav.goToMainLine();
+  assert(nav.onMainLine() && nav.board().get(1, 1) === WHITE,
+    'goToMainLine restores the main line at the same depth');
 }
 
 // ----- delete prunes the move and the line that follows it -----
