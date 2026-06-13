@@ -489,7 +489,7 @@ function renderVariations() {
 
   if (offMain) {
     const back = el('button', 'var-chip main-line', '↩ Main line');
-    back.title = 'Return to the main line (M)';
+    back.title = 'Back to where this line branched off the main line (M)';
     back.addEventListener('click', () => {
       nav.goToMainLine();
       sound.tick();

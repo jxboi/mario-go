@@ -167,8 +167,11 @@ function assert(cond, msg) {
   nav.goToNode(game.tree.children[0].children[1]); // the W(5,5) branch
   assert(!nav.onMainLine(), 'off the main line on the variation');
   nav.goToMainLine();
-  assert(nav.onMainLine() && nav.board().get(1, 1) === WHITE,
-    'goToMainLine restores the main line at the same depth');
+  assert(nav.onMainLine(), 'goToMainLine restores the main line');
+  assert(nav.index === 1, 'positioned on the branch-point stone');
+  assert(nav.board().get(0, 0) === BLACK && nav.board().get(1, 1) === EMPTY,
+    'sits on the shared stone, before the lines diverge');
+  assert(nav.variations().length === 2, 'both continuations visible at the branch point');
 }
 
 // ----- delete prunes the move and the line that follows it -----
