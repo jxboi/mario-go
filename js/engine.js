@@ -356,12 +356,23 @@ export class Navigator {
     return true;
   }
 
-  /** Route the active line back to the main line, keeping the current depth. */
+  /**
+   * Route the active line back to the main line, positioned on the stone
+   * where the current variation branched off (the last move shared with the
+   * main line). If already on the main line, the index is left untouched.
+   */
   goToMainLine() {
-    const depth = this.index;
+    // find the depth at which the active line first leaves children[0]
+    let diverge = this.path.length;
+    let node = this.tree;
+    for (let i = 1; i < this.path.length; i++) {
+      if (node.children[0] !== this.path[i]) { diverge = i; break; }
+      node = this.path[i];
+    }
+    const target = diverge < this.path.length ? diverge - 1 : this.index;
     this.path = [this.tree, ...this.mainlineFrom(this.tree)];
     this.replayPath();
-    this.index = Math.min(depth, this.moveCount);
+    this.index = Math.min(target, this.moveCount);
     return this.frame();
   }
 
