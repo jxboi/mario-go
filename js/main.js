@@ -9,6 +9,7 @@ import {
 } from './engine.js';
 import { BoardRenderer, drawThumbnail } from './board.js';
 import { gameToSgf, sgfToGame } from './sgf.js';
+import { AnalysisClient, lineSignature } from './ai.js';
 import * as store from './storage.js';
 import { SoundEngine } from './sound.js';
 import { AmbientBackground } from './ambient.js';
@@ -19,7 +20,16 @@ const COL_LETTERS = 'ABCDEFGHJKLMNOPQRST';
 
 const state = {
   games: store.loadGames(),
-  settings: { sfx: true, ambientAudio: false, showNumbers: false, ...store.loadSettings() },
+  settings: {
+    sfx: true,
+    ambientAudio: false,
+    showNumbers: false,
+    aiEndpoint: '',
+    aiKey: '',
+    aiMaxVisits: 100,
+    aiThreshold: 10, // % win-rate drop that counts as a mistake
+    ...store.loadSettings(),
+  },
   game: null,
   nav: null,
   view: 'library',
@@ -28,6 +38,7 @@ const state = {
   libraryFilter: 'all',
   lastCaptures: { black: 0, white: 0 },
   replay: { playing: false, paused: false, speed: 1, timer: null },
+  ai: { analyzing: false, controller: null, overlay: true },
 };
 
 const sound = new SoundEngine();
@@ -271,6 +282,7 @@ function openGame(game, atIndex = null) {
   renderTimeline();
   renderMetaPanel();
   renderMoments();
+  renderAiPanel();
 }
 
 function nextColor() {
@@ -318,6 +330,7 @@ function syncBoard(animate) {
   updateMovePanel();
   updateTimelineHighlight();
   renderVariations();
+  updateAiForIndex();
 }
 
 function setCaptureCount(id, value, key) {
@@ -604,6 +617,295 @@ function renderMoments() {
   for (const m of moments) list.appendChild(momentRow(m));
 }
 
+// ---------------------------------------------------------------- AI review
+
+function getAnalysisClient() {
+  return new AnalysisClient({
+    endpoint: state.settings.aiEndpoint,
+    apiKey: state.settings.aiKey,
+  });
+}
+
+/** True when the stored analysis still matches the current move sequence. */
+function analysisFresh(game) {
+  return !!(game && game.analysis
+    && game.analysis.lineSignature === lineSignature(game));
+}
+
+/** Add the "mistake" tag to moves whose win-rate loss clears the threshold. */
+function autoTagMistakes(game) {
+  const analysis = game.analysis;
+  if (!analysis || !analysis.losses) return 0;
+  const threshold = (state.settings.aiThreshold || 10) / 100;
+  let tagged = 0;
+  game.moves.forEach((move, i) => {
+    const entry = analysis.losses[i];
+    if (!entry || entry.loss < threshold) return;
+    if (!move.tags) move.tags = [];
+    if (!move.tags.includes('mistake')) {
+      move.tags.push('mistake');
+      tagged += 1;
+    }
+  });
+  return tagged;
+}
+
+async function analyzeCurrentGame() {
+  const { game, ai } = state;
+  if (!game || ai.analyzing) return;
+  const client = getAnalysisClient();
+  if (!client.configured) {
+    openAiSettings();
+    toast('Add a KataGo analysis endpoint first');
+    return;
+  }
+  if (game.moves.length === 0) {
+    toast('Place some stones before analyzing');
+    return;
+  }
+
+  ai.analyzing = true;
+  ai.controller = new AbortController();
+  $('btn-ai-analyze').disabled = true;
+  $('ai-progress').hidden = false;
+  $('ai-bar-fill').style.width = '15%';
+  $('ai-progress-text').textContent = `Analyzing ${game.moves.length} moves…`;
+
+  try {
+    const analysis = await client.analyzeGame(game, {
+      maxVisits: state.settings.aiMaxVisits || 100,
+      signal: ai.controller.signal,
+    });
+    $('ai-bar-fill').style.width = '100%';
+    game.analysis = analysis;
+    const tagged = autoTagMistakes(game);
+    persist(true);
+    sound.saveChime();
+    renderAiPanel();
+    renderTimeline();
+    renderMoments();
+    syncBoard(false);
+    toast(tagged > 0
+      ? `Review ready — ${tagged} mistake${tagged > 1 ? 's' : ''} flagged`
+      : 'Review ready');
+  } catch (err) {
+    console.error(err);
+    toast(err.message || 'Analysis failed');
+  } finally {
+    ai.analyzing = false;
+    ai.controller = null;
+    $('btn-ai-analyze').disabled = false;
+    $('ai-progress').hidden = true;
+    $('ai-bar-fill').style.width = '0%';
+  }
+}
+
+/** Show/hide the AI panel pieces based on config and stored analysis. */
+function renderAiPanel() {
+  const game = state.game;
+  const hasAnalysis = !!(game && game.analysis);
+  const fresh = analysisFresh(game);
+  $('btn-ai-analyze').textContent = hasAnalysis ? 'Re-analyze game' : 'Analyze game';
+  $('ai-hint').hidden = hasAnalysis;
+  $('ai-stale').hidden = !hasAnalysis || fresh;
+  $('ai-results').hidden = !hasAnalysis;
+  $('chk-ai-overlay').checked = state.ai.overlay;
+  updateAiForIndex();
+}
+
+/** Engine candidate overlays for the current main-line position, if fresh. */
+function candidatesForIndex() {
+  const { game, nav, ai } = state;
+  if (!ai.overlay || !nav || state.replay.playing) return [];
+  if (!analysisFresh(game) || !nav.onMainLine()) return [];
+  const turn = game.analysis.turns[nav.index];
+  if (!turn) return [];
+  const mover = nav.nextColor();
+  return turn.candidates
+    .filter((c) => c.xy && c.winrateBlack != null)
+    .map((c) => ({
+      x: c.xy.x,
+      y: c.xy.y,
+      winrate: mover === BLACK ? c.winrateBlack : 1 - c.winrateBlack,
+      score: c.scoreLeadBlack == null
+        ? null : (mover === BLACK ? c.scoreLeadBlack : -c.scoreLeadBlack),
+      order: c.order,
+      best: c.order === 0,
+    }));
+}
+
+function updateAiForIndex() {
+  const { game, nav } = state;
+  if (state.view !== 'editor' || !nav) return;
+  renderer.setAnalysis(candidatesForIndex());
+  if (game && game.analysis) renderAiGraph();
+
+  const current = $('ai-current');
+  const candBox = $('ai-candidates');
+  if (!current || !candBox) return;
+  if (!analysisFresh(game)) { current.textContent = ''; candBox.replaceChildren(); return; }
+
+  if (!nav.onMainLine()) {
+    current.textContent = 'Analysis follows the main line — return to it to see the review here.';
+    candBox.replaceChildren();
+    return;
+  }
+
+  const turn = game.analysis.turns[nav.index];
+  current.replaceChildren();
+  candBox.replaceChildren();
+  if (!turn) return;
+
+  if (turn.blackWinrate != null) {
+    const line = el('div');
+    const pct = Math.round(turn.blackWinrate * 100);
+    line.append('Position: ');
+    line.appendChild(el('span', 'ai-win', `Black ${pct}%`));
+    if (turn.scoreLead != null) {
+      const s = turn.scoreLead >= 0
+        ? `B+${turn.scoreLead.toFixed(1)}` : `W+${(-turn.scoreLead).toFixed(1)}`;
+      line.append(` · ${s}`);
+    }
+    current.appendChild(line);
+  }
+
+  const move = nav.currentMove();
+  const loss = nav.index > 0 ? game.analysis.losses[nav.index - 1] : null;
+  if (move && loss && loss.loss != null) {
+    const line = el('div');
+    line.append(`Move ${nav.index} (${colorName(move.color)} ${coordLabel(move)}): `);
+    const drop = Math.round(loss.loss * 100);
+    if (drop >= (state.settings.aiThreshold || 10)) {
+      line.appendChild(el('span', 'ai-loss', `lost ${drop}%`));
+      line.append(` vs best ${loss.bestGtp}`);
+    } else {
+      line.append(`good (−${drop}%)`);
+    }
+    current.appendChild(line);
+  }
+
+  // ranked candidate list for the position about to be played
+  const mover = nav.nextColor();
+  turn.candidates.slice(0, 4).forEach((c) => {
+    if (c.winrateBlack == null) return;
+    const w = mover === BLACK ? c.winrateBlack : 1 - c.winrateBlack;
+    const row = el('div', 'ai-cand');
+    const swatch = el('span', 'ai-swatch');
+    swatch.style.background = `hsl(${Math.round(w * 130)}, 62%, 46%)`;
+    row.appendChild(swatch);
+    row.appendChild(el('span', 'ai-coord', c.xy ? coordFromXY(c.xy) : 'pass'));
+    let txt = `${Math.round(w * 100)}%`;
+    if (c.scoreLeadBlack != null) {
+      const s = mover === BLACK ? c.scoreLeadBlack : -c.scoreLeadBlack;
+      txt += ` · ${s >= 0 ? '+' : ''}${s.toFixed(1)}`;
+    }
+    if (c.visits != null) txt += ` · ${c.visits} visits`;
+    row.appendChild(el('span', 'ai-cand-info', txt));
+    candBox.appendChild(row);
+  });
+}
+
+function coordFromXY(xy) {
+  return `${COL_LETTERS[xy.x]}${state.game.size - xy.y}`;
+}
+
+/** Win-rate (Black) over the game, with mistake dots and a current marker. */
+function renderAiGraph() {
+  const game = state.game;
+  const canvas = $('ai-graph');
+  const analysis = game.analysis;
+  if (!analysis) return;
+  const turnNums = Object.keys(analysis.turns).map(Number).sort((a, b) => a - b);
+  const maxTurn = turnNums.length ? turnNums[turnNums.length - 1] : 0;
+
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || 240;
+  const h = canvas.clientHeight || 96;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const xAt = (t) => (maxTurn ? (t / maxTurn) * (w - 2) + 1 : w / 2);
+  const yAt = (wb) => h - wb * h;
+
+  // 50% reference line
+  ctx.strokeStyle = 'rgba(120, 100, 70, 0.30)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(0, h / 2);
+  ctx.lineTo(w, h / 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // win-rate path (only across turns we actually have data for)
+  const pts = turnNums
+    .filter((t) => analysis.turns[t].blackWinrate != null)
+    .map((t) => ({ x: xAt(t), y: yAt(analysis.turns[t].blackWinrate) }));
+  if (pts.length > 1) {
+    const area = new Path2D();
+    area.moveTo(pts[0].x, h);
+    for (const p of pts) area.lineTo(p.x, p.y);
+    area.lineTo(pts[pts.length - 1].x, h);
+    area.closePath();
+    ctx.fillStyle = 'rgba(43, 37, 32, 0.10)';
+    ctx.fill(area);
+
+    ctx.strokeStyle = 'rgba(43, 37, 32, 0.85)';
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+    ctx.stroke();
+  }
+
+  // mistake dots on the move that lost the win-rate
+  const threshold = (state.settings.aiThreshold || 10) / 100;
+  (analysis.losses || []).forEach((entry, i) => {
+    if (!entry || entry.loss < threshold) return;
+    const turn = analysis.turns[i + 1];
+    if (!turn || turn.blackWinrate == null) return;
+    ctx.fillStyle = 'rgba(179, 64, 42, 0.95)';
+    ctx.beginPath();
+    ctx.arc(xAt(i + 1), yAt(turn.blackWinrate), 3, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // current position marker
+  if (state.nav) {
+    const x = xAt(Math.min(state.nav.index, maxTurn));
+    ctx.strokeStyle = 'rgba(184, 134, 11, 0.9)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, h);
+    ctx.stroke();
+  }
+}
+
+function openAiSettings() {
+  const form = $('ai-form');
+  form.elements.endpoint.value = state.settings.aiEndpoint || '';
+  form.elements.apiKey.value = state.settings.aiKey || '';
+  form.elements.maxVisits.value = state.settings.aiMaxVisits || 100;
+  form.elements.threshold.value = state.settings.aiThreshold || 10;
+  $('dialog-ai').showModal();
+}
+
+function submitAiSettings() {
+  const form = $('ai-form');
+  state.settings.aiEndpoint = form.elements.endpoint.value.trim();
+  state.settings.aiKey = form.elements.apiKey.value.trim();
+  const visits = parseInt(form.elements.maxVisits.value, 10);
+  const thr = parseInt(form.elements.threshold.value, 10);
+  state.settings.aiMaxVisits = Number.isFinite(visits) && visits > 0 ? visits : 100;
+  state.settings.aiThreshold = Number.isFinite(thr) && thr > 0 ? Math.min(thr, 100) : 10;
+  store.saveSettings(state.settings);
+  renderAiPanel();
+  toast('AI engine settings saved');
+}
+
 // ------------------------------------------------------------- gameplay
 
 renderer.onPlay = (x, y) => {
@@ -623,6 +925,7 @@ renderer.onPlay = (x, y) => {
   syncBoard(true);
   renderTimeline();
   renderMoments();
+  renderAiPanel();
   if (result.branched) toast('New variation created');
 };
 
@@ -633,6 +936,7 @@ function doPass() {
   persist();
   syncBoard(false);
   renderTimeline();
+  renderAiPanel();
   toast(result.branched
     ? 'New variation created (pass)'
     : `${colorName(nav.currentMove().color)} passes`);
@@ -645,6 +949,7 @@ function doUndo() {
   syncBoard(true);
   renderTimeline();
   renderMoments();
+  renderAiPanel();
 }
 
 function doRedo() {
@@ -654,6 +959,7 @@ function doRedo() {
   syncBoard(true);
   renderTimeline();
   renderMoments();
+  renderAiPanel();
 }
 
 async function doDeleteMove() {
@@ -668,6 +974,7 @@ async function doDeleteMove() {
   syncBoard(false);
   renderTimeline();
   renderMoments();
+  renderAiPanel();
   toast(dropped > 0
     ? `Move deleted (${dropped} later move${dropped > 1 ? 's' : ''} removed)`
     : 'Move deleted');
@@ -1076,6 +1383,26 @@ function bindEvents() {
     persist();
   });
 
+  // AI review
+  $('btn-ai-analyze').addEventListener('click', analyzeCurrentGame);
+  $('btn-ai-settings').addEventListener('click', openAiSettings);
+  $('ai-form').addEventListener('submit', submitAiSettings);
+  $('btn-ai-cancel').addEventListener('click', () => $('dialog-ai').close());
+  $('chk-ai-overlay').addEventListener('change', (e) => {
+    state.ai.overlay = e.target.checked;
+    updateAiForIndex();
+  });
+  $('ai-graph').addEventListener('click', (e) => {
+    if (!state.nav || !state.game || !state.game.analysis) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const turnNums = Object.keys(state.game.analysis.turns).map(Number);
+    const maxTurn = turnNums.length ? Math.max(...turnNums) : state.nav.moveCount;
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    state.nav.goTo(Math.round(ratio * maxTurn));
+    sound.tick();
+    syncBoard(false);
+  });
+
   $('btn-edit-meta').addEventListener('click', () => openGameForm(state.game));
   $('btn-export').addEventListener('click', () => exportSgf(state.game));
   $('btn-back-library').addEventListener('click', () => { stopReplay(); persist(true); showView('library'); });
@@ -1112,7 +1439,7 @@ function bindEvents() {
     if (state.view !== 'editor' || !state.nav) return;
     const target = e.target;
     if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
-    if ($('dialog-game').open || $('dialog-confirm').open) return;
+    if ($('dialog-game').open || $('dialog-confirm').open || $('dialog-ai').open) return;
 
     if (e.key === 'Escape' && state.replay.playing) { stopReplay(); return; }
     if (e.key === ' ') {

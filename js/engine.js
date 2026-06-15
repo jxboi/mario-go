@@ -198,6 +198,8 @@ export function createGame(meta = {}) {
     notes: meta.notes || '',
     thoughts: meta.thoughts || '',
     reviewLater: !!meta.reviewLater,
+    /** cached AI review (see ai.js); null until the game is analyzed */
+    analysis: meta.analysis || null,
     /** move: { pass?, color, x?, y?, note?, tags?, bookmarked? } */
     tree,
     /** derived main line of `tree` */
