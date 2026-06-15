@@ -53,6 +53,21 @@ browser (localStorage) — no account, no network needed.
 - Move numbers on stones (toggle), breathing last-move marker,
   capture counters that bump when stones are taken
 
+**AI review (optional)**
+- Connect your own KataGo Analysis Engine endpoint (or a compatible cloud
+  proxy) under *AI review → Engine…* in the editor. The game is sent as a
+  single position query; results are cached locally on the game and nothing
+  else leaves the browser.
+- One click analyzes the whole game and gives you:
+  - a win-rate + score graph across every move (click it to jump),
+  - the engine's best moves drawn on the board at the current position,
+    tinted by win-rate,
+  - per-move loss versus the best move, and
+  - automatic `mistake` tags on moves that drop the win-rate past a
+    threshold you choose.
+- Entirely opt-in: with no endpoint configured the journal stays the same
+  fully offline recorder it has always been.
+
 **Import / export**
 - Standard SGF export and import (main line). Notes use `C[]`,
   bookmarks use the standard `HO[]` hotspot property, and tags use a
@@ -100,6 +115,7 @@ js/board.js        canvas renderer: wood, stones, animations, input
 js/ambient.js      background mist / leaf particle canvas
 js/sound.js        WebAudio synthesized SFX and ambient pad
 js/icons.js        inline SVG icon set
+js/ai.js           AI review: KataGo analysis client + win-rate math (no DOM)
 js/main.js         application controller wiring everything together
 test/              node-runnable logic tests
 ```
@@ -113,7 +129,10 @@ moves that became illegal.
 
 ```bash
 node test/engine.test.mjs
+node test/ai.test.mjs
 ```
 
-Covers captures, suicide, ko, undo/redo, pass, navigation, mid-game
-branching / variations, deletes and SGF round-trips (including variations).
+`engine.test.mjs` covers captures, suicide, ko, undo/redo, pass, navigation,
+mid-game branching / variations, deletes and SGF round-trips (including
+variations). `ai.test.mjs` covers the AI-review helpers: coordinate mapping,
+KataGo query building, response parsing and the win-rate loss math.

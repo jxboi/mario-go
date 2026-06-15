@@ -139,6 +139,32 @@
               <button id="btn-delete-move" class="danger-btn small">Delete this move</button>
             </div>
 
+            <div class="panel-card" id="panel-ai">
+              <div class="panel-card-head">
+                <h3><span class="ink-accent small">析</span> AI review</h3>
+                <button id="btn-ai-settings" class="ghost-btn small">Engine…</button>
+              </div>
+              <button id="btn-ai-analyze" class="primary-btn small full">Analyze game</button>
+              <div id="ai-progress" class="ai-progress" hidden>
+                <div class="ai-bar"><div id="ai-bar-fill" class="ai-bar-fill"></div></div>
+                <span id="ai-progress-text" class="muted small">Analyzing…</span>
+              </div>
+              <p id="ai-stale" class="ai-stale small" hidden>The game changed since this review — analyze again to refresh.</p>
+              <div id="ai-results" hidden>
+                <canvas id="ai-graph" class="ai-graph" aria-label="Win-rate over the game"></canvas>
+                <div id="ai-current" class="ai-current"></div>
+                <label class="check-row compact">
+                  <input type="checkbox" id="chk-ai-overlay" checked>
+                  <span>Show best moves on the board</span>
+                </label>
+                <div id="ai-candidates" class="ai-candidates"></div>
+              </div>
+              <p id="ai-hint" class="muted small">
+                Connect a KataGo analysis endpoint to chart win-rate, see the
+                engine's best moves and flag mistakes.
+              </p>
+            </div>
+
             <div class="panel-card" id="panel-moments">
               <div class="panel-card-head">
                 <h3>Key moments</h3>
@@ -226,6 +252,37 @@
       <div class="form-actions">
         <button type="button" id="btn-form-cancel" class="ghost-btn">Cancel</button>
         <button type="submit" class="primary-btn" id="btn-form-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- AI review engine settings -->
+  <dialog id="dialog-ai">
+    <form id="ai-form" method="dialog">
+      <h2>AI review engine</h2>
+      <p class="muted small">
+        Point this at a KataGo Analysis Engine HTTP endpoint (or a compatible
+        cloud proxy). The current game is sent to it as a position query;
+        the results are stored only in this browser.
+      </p>
+      <label class="span2">Endpoint URL
+        <input name="endpoint" type="url" placeholder="https://…/analyze" autocomplete="off">
+      </label>
+      <label class="span2">API key (optional)
+        <input name="apiKey" type="password" placeholder="sent as a Bearer token" autocomplete="off">
+      </label>
+      <div class="form-grid">
+        <label>Max visits / move
+          <input name="maxVisits" type="number" min="1" step="1" value="100">
+        </label>
+        <label>Mistake threshold
+          <input name="threshold" type="number" min="1" max="100" step="1" value="10">
+          <span class="field-hint">% win-rate drop</span>
+        </label>
+      </div>
+      <div class="form-actions">
+        <button type="button" id="btn-ai-cancel" class="ghost-btn">Cancel</button>
+        <button type="submit" class="primary-btn">Save</button>
       </div>
     </form>
   </dialog>

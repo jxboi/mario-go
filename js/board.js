@@ -36,6 +36,7 @@ export class BoardRenderer {
     this.ripples = [];            // { x, y, start } impact rings under new stones
     this.ghost = null;            // { x, y, color }
     this.pendingTap = null;       // { x, y } awaiting confirm on touch
+    this.candidates = [];         // AI best-move overlays for this position
 
     this.onPlay = null;           // (x, y) => void
     this.interactive = true;
@@ -95,6 +96,7 @@ export class BoardRenderer {
     this.stoneAnims.clear();
     this.dying = [];
     this.particles = [];
+    this.candidates = [];
     this._computeGeometry();
     this.woodCache = null;
     this.sprites = null;
@@ -147,6 +149,16 @@ export class BoardRenderer {
 
   setGhost(point) {
     this.ghost = point;
+    this.draw();
+  }
+
+  /**
+   * AI candidate overlays for the current position. Each item:
+   *   { x, y, winrate (0..1, mover's view), score, order, best }
+   * Pass an empty array (or nothing) to clear them.
+   */
+  setAnalysis(candidates) {
+    this.candidates = Array.isArray(candidates) ? candidates : [];
     this.draw();
   }
 
@@ -271,8 +283,49 @@ export class BoardRenderer {
     }
 
     this._drawAnnotations(now);
+    this._drawCandidates();
     this._drawGhost();
     this._drawParticles();
+  }
+
+  /** Translucent discs on the engine's suggested moves, tinted by win-rate. */
+  _drawCandidates() {
+    if (!this.candidates.length) return;
+    const { ctx } = this;
+    const r = this.stoneRadius;
+    for (const c of this.candidates) {
+      if (this.grid[c.y * this.boardSize + c.x] !== EMPTY) continue;
+      const cx = this.px(c.x);
+      const cy = this.px(c.y);
+      const w = Math.max(0, Math.min(1, c.winrate ?? 0.5));
+      const hue = Math.round(w * 130); // 0 = red (bad) … 130 = green (good)
+      ctx.save();
+      ctx.globalAlpha = c.best ? 0.82 : 0.6;
+      ctx.fillStyle = `hsl(${hue}, 62%, 46%)`;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r * 0.92, 0, Math.PI * 2);
+      ctx.fill();
+      if (c.best) {
+        ctx.globalAlpha = 0.95;
+        ctx.strokeStyle = 'rgba(212, 160, 35, 0.95)';
+        ctx.lineWidth = Math.max(r * 0.14, 1.6);
+        ctx.stroke();
+      }
+      // win-rate percentage, with a smaller score delta beneath it
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `600 ${Math.max(r * 0.5, 8)}px 'Noto Sans', sans-serif`;
+      ctx.fillText(`${Math.round(w * 100)}`, cx, cy - r * 0.16);
+      if (c.score != null) {
+        ctx.globalAlpha = 0.9;
+        ctx.font = `${Math.max(r * 0.34, 7)}px 'Noto Sans', sans-serif`;
+        const s = c.score >= 0 ? `+${c.score.toFixed(1)}` : c.score.toFixed(1);
+        ctx.fillText(s, cx, cy + r * 0.42);
+      }
+      ctx.restore();
+    }
   }
 
   _drawWood() {
